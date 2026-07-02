@@ -1,0 +1,104 @@
+================================================================
+MODERN ART PORTFOLIO REFERENCES
+Compiled from the two research reports provided.
+Goal: design references for building an artist's portfolio website
+      (image-first, minimal, 2025-2026 style) — to be built in code.
+================================================================
+
+LEGEND:
+  [OK]      verified real / accurate
+  [CHECK]   exists but pricing/details unconfirmed — verify before relying on it
+  [DOUBT]   could not verify / description likely embellished or fabricated
+
+
+----------------------------------------------------------------
+LIVE ARTIST / GALLERY WEBSITES (real-world models)
+----------------------------------------------------------------
+Zaria Forman          https://www.zariaforman.com            [OK]  best artwork-detail + masonry model
+Catherine Gagnon      https://www.catherinegagnon.com        [CHECK] series-grouped vertical-scroll painter
+David Hockney         https://www.hockney.com                [OK]  archive-style nav (note: Hockney died Jun 2026)
+Kim Song Ri           https://kimsongri.com                  [CHECK] extreme "invisible UI" minimalism
+Karin van Etten       https://karinvanetten.nl               [CHECK] minimal light grid
+Matthieu Sery         https://matthieusery.net               [CHECK] minimal light grid
+Francesco Campese     https://www.francescocampese.it        [CHECK] minimal light grid
+Goodman Gallery       https://goodman-gallery.com/           [CHECK] gallery + e-commerce behind calm UI
+Yann Novak            https://www.yannnovak.com              [CHECK] layout toggling / sort-filtering
+Iris K                https://www.awwwards.com/sites/iris-k  [CHECK] dark refined minimalism
+Luke Baffait          https://lukebaffait.fr/                [CHECK] dev portfolio, but right tone/motion
+
+
+----------------------------------------------------------------
+DESIGN GALLERIES (browse for inspiration)
+----------------------------------------------------------------
+Awwwards - Art & Illustration   https://www.awwwards.com/websites/art-illustration/   [OK]
+Godly - Portfolio               https://godly.website/websites/portfolio              [OK]
+
+
+----------------------------------------------------------------
+FRAMER TEMPLATES
+----------------------------------------------------------------
+Visual Artist   https://visual-artist.framer.website/                                  [OK]    Home/Projects/About/Contact + CMS (confirm "free")
+Artfolio        https://www.framer.com/community/marketplace/templates/artfolio/        [CHECK] series-paced viewing
+Gualdi          https://www.framer.com/community/marketplace/templates/gualdi/          [CHECK] minimalist (paid)
+Mastak          https://www.framer.com/community/marketplace/templates/mastak/          [CHECK] illustration-first (~$59)
+Plywood         https://www.framer.com/community/marketplace/templates/plywood/         [CHECK] canvas vs street works split
+REVIX           https://www.gola.supply/blog/artist-portfolio-framer-templates          [CHECK] exhibition pages (~$59) (link is a listicle)
+Hanssen         https://www.hxmzaehsan.com/blog/framer-templates-for-creatives          [DOUBT] (link is a blog, not the template)
+Framer artist category   https://www.framer.com/marketplace/templates/category/artist/  [OK]    browse all artist templates
+
+
+----------------------------------------------------------------
+WEBFLOW TEMPLATES
+----------------------------------------------------------------
+Art Gallery 128   https://webflow.com/templates/html/art-gallery-artist-website-template       [CHECK] free, many inner pages
+Revix             https://webflow.com/templates/html/revix-website-template                    [CHECK] grid + exhibitions (paid)
+Simplefolio X     https://webflow.com/templates/html/simplefoliox-portfolio-website-template   [CHECK] bento-style, 36+ sections (paid)
+HelenBooth        https://www.victorflow.com/blog/artist-webflow-templates                     [DOUBT] (link is a listicle, not the template)
+Modo / Modos (Temlis)   https://www.temlis.com/templates/modo                                  [CHECK] museum-style (verify free license)
+
+
+----------------------------------------------------------------
+SQUARESPACE TEMPLATES
+----------------------------------------------------------------
+Kester       https://www.jpkdesignco.com/blog/best-squarespace-templates-for-illustrators   [CHECK] grid gallery + shop (link is a blog)
+Montclaire   https://whatsquare.space/blog/best-squarespace-template-for-artists             [CHECK] art-gallery + e-commerce (link is a blog)
+
+
+----------------------------------------------------------------
+FIGMA TEMPLATES
+----------------------------------------------------------------
+Bento Grid Portfolio       https://www.figma.com/community/file/1369209806540918620/bento-grid-portfolio       [CHECK] free
+Portfolio Design - Bento   https://www.figma.com/community/file/1454733232397070322/portfolio-design-bento     [CHECK] free
+Illustria (ThemeForest)    https://themeforest.net/item/illustria-artist-portfolio-figma-template/59341428      [CHECK] paid
+One Art (ThemeForest)      https://themeforest.net/item/one-art-arts-portfolio-gallery-figma-template/58759441   [CHECK] paid, 27 layouts
+
+
+----------------------------------------------------------------
+CODE / OPEN-SOURCE (build-from references)
+----------------------------------------------------------------
+nextjs-artist-portfolio    https://github.com/satvikvirmani/nextjs-artist-portfolio      [OK]    PWA, full-screen viewer, admin (appears in BOTH reports)
+artist-portfolio-website   https://github.com/lumamontes/artist-portfolio-website        [OK]    Next.js + Prismic + Tailwind
+astro-masonry              https://github.com/OlivierEstevez/astro-masonry              [OK]    zero-dep masonry, MIT, works with Astro <Image/>
+photo-gallery-astro        https://github.com/RaymondWHZ/photo-gallery-astro            [CHECK] Astro+Svelte+Tailwind, Notion CMS
+artist-portfolio (Artelier) https://github.com/Byukusenge-Andrew/artist-portfolio       [OK]    Next.js + Stripe + lightbox + commission inbox
+Milky-Way                  https://github.com/ttomczak3/Milky-Way                        [CHECK] Astro minimal
+works-of-arts              https://github.com/jbejjani2022/works-of-arts                 [DOUBT] could NOT verify repo or artist "Marcella Vlahos"
+Magic UI - Bento Grid      https://magicui.design/docs/components/bento-grid             [OK]    React/Tailwind bento component
+Clay (Astro theme)         https://astro.build/themes/details/clay/                      [CHECK] Astro, dark mode
+Artistfolio (Astro theme)  https://astro.build/themes/details/artistfolio-portfolio-template-for-graphic-artist/   [CHECK] Astro + Alpine + MDX (paid)
+Aperture by AeroLaunch     https://aerolaunch.app/                                       [DOUBT] real theme, but described features look invented
+
+
+================================================================
+NOTES
+================================================================
+- Report #1 was the more reliable of the two; Report #2 was heavily
+  embellished and its top pick (works-of-arts) could not be verified.
+- Many [CHECK] links point to listicles/blogs rather than the template
+  itself - follow through to the real demo before committing.
+- Recommended build direction (from both reports): a coded Astro or
+  Next.js site, Tailwind, headless CMS (Supabase/Sanity/Notion/Prismic),
+  masonry or bento gallery, per-artwork detail pages
+  (title / year / medium / dimensions / sold status), 5-item nav
+  (Home / Gallery / Exhibitions / About / Contact).
+================================================================
