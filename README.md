@@ -152,6 +152,7 @@ claude-auth switch personal
 | `claude-auth usage [name]` | Show plan tier + rate-limit usage (session + weekly) across accounts. Detail view for one account. |
 | `claude-auth autoswitch on/off/status` | Auto-switch to another account when usage gets high. `--threshold`, `--window`, `--strategy`. |
 | `claude-auth pool start/stop/status` | Run a local proxy that pools all accounts and auto-fails-over on rate limits — **no restart needed**. `--port`, `--mode`, `--no-wire`. |
+| `claude-auth pool create/join/use/usage/members/remove/leave/clear` | **Shared pool** — pool accounts with friends via a free, encrypted online store (no server). Pick who serves you live with `use`; `usage` shows each member's live headroom. |
 | `claude-auth refresh [name]` | Refresh stored tokens of inactive accounts (keeps usage live & backups fresh). |
 | `claude-auth statusline` | Compact one-line status (active account + weekly %) for Claude Code's status line. |
 | `claude-auth current` / `whoami` | Show the active account. |
@@ -257,6 +258,42 @@ Turn it off with `claude-auth pool stop` — it shuts the proxy down and restore
 > **⚠️ Heads-up on Anthropic's terms.** `failover` mode uses one account at a time — the same as switching manually, just automated. `balance` mode draws on several subscription accounts to serve one workflow, which may run against Anthropic's subscription terms (around getting around rate limits). Use your own accounts, and use `balance` knowing that. When in doubt, stick with `failover`.
 
 > **Note:** `pool` works by setting `ANTHROPIC_BASE_URL` so Claude Code routes through the local proxy. If a future Claude Code version stops honoring that for subscription logins, the pool simply won't receive traffic (and `pool status` / `doctor` will tell you) — it can't break your normal setup, because `pool stop` always restores `settings.json`.
+
+### Share a pool of accounts with friends: `pool create` / `join`
+
+The local `pool` above only spans accounts saved on *your* Mac. A **shared pool** lets a group of friends pool their accounts together — with **no server to host**. Members' tokens live (encrypted) in a free [Pantry](https://getpantry.cloud) JSON store, and everyone runs the same local proxy fed from that one shared blob.
+
+```console
+# one person creates the pool (needs a free pantry id from getpantry.cloud)
+$ claude-auth pool create <pantry-id>
+  ✓ Pool created and encrypted.
+    Share this link with people you trust:
+    clpool:v1:pantry:<id>:<key>
+
+# friends join with that link — contributing their current account in one step
+$ claude-auth pool join "clpool:v1:pantry:<id>:<key>"
+
+# start it, then pick whose token serves you — switches live, no restart
+$ claude-auth pool start
+$ claude-auth pool use alice
+$ claude-auth pool usage      # live rate-limit headroom per member (who to switch to)
+$ claude-auth pool members    # who's in + served/consumed tallies
+```
+
+Unlike the local `pool`, the shared pool **does not auto-failover**: it serves the **one** account you selected — so prompt caching stays intact — and `pool use <name>` changes which token serves you, taking effect on **running** sessions instantly (the proxy re-reads your choice from a local file, so there's nothing to restart). If your selected account gets rate-limited, you switch manually.
+
+Admin: `pool remove <name>` drops any member, `pool leave` removes yourself, `pool clear` wipes the pool.
+
+**Security & trust model:**
+- Tokens are **encrypted client-side** — the key lives in the link and is never sent to Pantry, which only ever stores ciphertext (encrypt-then-MAC, stdlib only).
+- **Anyone with the link can decrypt every token in the pool** and overwrite the blob. Share it only with people you trust, and over a private channel (it's a secret, like an SSH key).
+- `pool remove` / `leave` / `clear` **un-share** a token but do **not revoke** it; to truly invalidate a token, its owner must log out / re-login.
+
+**Known limits** (inherent to a serverless, shared-blob design):
+- The store has no compare-and-swap, so two members writing at the same instant can lose the loser's change (usage counters are approximate).
+- Claude's refresh tokens are single-use, so a contributor who *also* uses Claude Code normally may have their token rotated out from under the pool — dedicate an account to the pool, or re-`join` occasionally.
+
+> **⚠️ Anthropic's terms:** pooling several people's subscriptions to serve one workflow may run against Anthropic's subscription terms (around circumventing rate limits). Use it with people you trust and at your own discretion.
 
 ### Keep every account's usage live: `refresh`
 
