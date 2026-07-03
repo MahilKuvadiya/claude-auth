@@ -277,8 +277,10 @@ $ claude-auth pool join "clpool:v1:pantry:<id>:<key>"
 $ claude-auth pool start
 $ claude-auth pool use alice
 $ claude-auth pool usage      # live rate-limit headroom per member (who to switch to)
-$ claude-auth pool members    # who's in + served/consumed tallies
+$ claude-auth pool members    # who's in + per-type token tallies (add --live for current counts)
 ```
+
+`pool members` breaks each member's **contributed** (tokens their account served) and **consumed** (tokens they ran) down by type — input, output, cache-read, cache-write — since prompt caching makes those costs very different. Tallies are pool accounting flushed every ~5 min; pass `--live` to merge the running proxy's un-flushed counts for up-to-the-second totals.
 
 Unlike the local `pool`, the shared pool **does not auto-failover**: it serves the **one** account you selected — so prompt caching stays intact — and `pool use <name>` changes which token serves you, taking effect on **running** sessions instantly (the proxy re-reads your choice from a local file, so there's nothing to restart). If your selected account gets rate-limited, you switch manually.
 
