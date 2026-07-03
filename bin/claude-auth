@@ -18,6 +18,10 @@ import time
 import shutil
 import getpass
 import signal
+import base64
+import hmac
+import hashlib
+import secrets
 import threading
 import subprocess
 import argparse
@@ -28,7 +32,7 @@ import concurrent.futures
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 
-__version__ = "1.9.0"
+__version__ = "1.10.0"
 
 API_USAGE = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
@@ -59,6 +63,14 @@ DEFAULT_POOL_PORT = 8848
 POOL_PID   = os.path.join(STORE_DIR, "pool.pid")
 POOL_STATE = os.path.join(STORE_DIR, "pool.json")
 POOL_LOG   = os.path.join(STORE_DIR, "pool.log")
+
+# shared "global pool" — a Pantry-backed, client-side-encrypted token blob that
+# friends contribute to and pool over. See the "shared pool" section.
+POOL_REMOTE = os.path.join(STORE_DIR, "pool-remote.json")   # local: joined pool link + our member id
+PANTRY_BASE = "https://getpantry.cloud/apiv1/pantry"        # free JSON store, no server to host
+POOL_BASKET = "claudepool"                                  # basket name inside the pantry
+POOL_LINK_PREFIX = "clpool:v1:pantry:"                      # <prefix><pantry-id>:<base64url-key>
+POOL_SYNC_SECS = 300                                        # how often the proxy re-pulls the blob (Pantry is rate-limited)
 # headers that must NOT be copied through a proxy (RFC 7230 §6.1)
 _HOP_BY_HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -1434,20 +1446,245 @@ def _pool_persist_token(name, token, refresh, expires_in):
         pass
 
 
-class _Pool:
-    """Holds every account's token and decides which one serves each request."""
+# ─────────────────── shared pool: crypto + Pantry-backed store ─────────────
+#
+# The "global pool" needs no server: a free Pantry basket holds one small
+# JSON blob — the list of members' refresh tokens plus usage counters — and
+# every member runs the same local `pool serve` proxy fed from that blob
+# instead of from their own Keychain. Because the blob holds refresh tokens,
+# it is ALWAYS encrypted client-side (encrypt-then-MAC, stdlib only): Pantry
+# only ever stores ciphertext, and the symmetric key lives in the pool link,
+# never transmitted to Pantry.
+#
+# KNOWN LIMITS (inherent to a serverless, shared-blob design — document, don't
+# pretend otherwise):
+#   • No compare-and-swap. Pantry replaces the whole basket on write, so two
+#     members writing at the same instant can lose the loser's change (usage
+#     counters are approximate; a token persist may need a re-join to recover).
+#   • Rotating refresh tokens. Claude's refresh tokens are single-use. A member
+#     who also uses Claude Code normally will have their own client rotate the
+#     token out from under the pool (and vice-versa) — dedicate an account to
+#     the pool, or expect to re-`join` occasionally.
+#   • Trust = the link. Anyone holding the link can read every token and
+#     overwrite the blob; `remove`/`leave`/`clear` UN-SHARE but do NOT revoke a
+#     token, and the key never rotates. Only share the link with people you
+#     trust, and treat "remove" as social, not enforced.
 
-    def __init__(self, mode, only=None):
+_PBKDF2_ITERS = 200_000
+
+def _derive_keys(secret, salt):
+    """Two independent 32-byte keys (encryption, authentication) from the pool key."""
+    material = hashlib.pbkdf2_hmac("sha256", secret, salt, _PBKDF2_ITERS, dklen=64)
+    return material[:32], material[32:]
+
+def _keystream(enc_key, nonce, n):
+    """HMAC-SHA256 in counter mode — a secure stream cipher, no external deps."""
+    out = bytearray()
+    counter = 0
+    while len(out) < n:
+        out += hmac.new(enc_key, nonce + counter.to_bytes(8, "big"), hashlib.sha256).digest()
+        counter += 1
+    return bytes(out[:n])
+
+def _pool_encrypt(secret, plaintext):
+    """secret,plaintext: bytes → base64 str of  salt|nonce|tag|ciphertext."""
+    salt = secrets.token_bytes(16)
+    nonce = secrets.token_bytes(16)
+    enc_key, mac_key = _derive_keys(secret, salt)
+    ct = bytes(a ^ b for a, b in zip(plaintext, _keystream(enc_key, nonce, len(plaintext))))
+    tag = hmac.new(mac_key, salt + nonce + ct, hashlib.sha256).digest()
+    return base64.b64encode(salt + nonce + tag + ct).decode()
+
+def _pool_decrypt(secret, blob_b64):
+    """Inverse of _pool_encrypt. Raises ValueError on a wrong key / tampering."""
+    raw = base64.b64decode(blob_b64)
+    salt, nonce, tag, ct = raw[:16], raw[16:32], raw[32:64], raw[64:]
+    enc_key, mac_key = _derive_keys(secret, salt)
+    if not hmac.compare_digest(hmac.new(mac_key, salt + nonce + ct, hashlib.sha256).digest(), tag):
+        raise ValueError("wrong pool key or corrupt data")
+    return bytes(a ^ b for a, b in zip(ct, _keystream(enc_key, nonce, len(ct))))
+
+def _b64u(b):
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+def _b64u_dec(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+def _pool_link_encode(pantry_id, key_bytes):
+    return f"{POOL_LINK_PREFIX}{pantry_id}:{_b64u(key_bytes)}"
+
+def _pool_link_decode(link):
+    """(pantry_id, key_bytes) from a clpool:… link. `die`s on anything malformed."""
+    link = (link or "").strip()
+    link = link.replace("#", ":", 1)   # tolerate a '#' before the key (URL-fragment style)
+    if not link.startswith(POOL_LINK_PREFIX):
+        die("not a valid pool link — expected it to start with " + clay(POOL_LINK_PREFIX))
+    rest = link[len(POOL_LINK_PREFIX):]
+    if ":" not in rest:
+        die("pool link is missing its key")
+    pantry_id, key = rest.rsplit(":", 1)
+    key = key[2:] if key.startswith("k=") else key
+    if not pantry_id:
+        die("pool link is missing the pantry id")
+    try:
+        kb = _b64u_dec(key)
+    except Exception:
+        die("pool link key is malformed")
+    if len(kb) < 16:
+        die("pool link key is too short")
+    return pantry_id, kb
+
+def _empty_pool():
+    return {"version": 1, "members": {}, "usage": {}, "served": {}}
+
+def _pantry_url(pantry_id, basket):
+    return f"{PANTRY_BASE}/{pantry_id}/basket/{basket}"
+
+def _pantry_headers():
+    # getpantry.cloud sits behind Cloudflare, which 403s the default urllib
+    # User-Agent (error 1010) — send a real one.
+    return {"Content-Type": "application/json",
+            "User-Agent": f"claude-auth/{__version__}"}
+
+def _pantry_retry_after(e, default=2):
+    try:
+        return max(1, min(10, int(float(e.headers.get("Retry-After") or default))))
+    except Exception:
+        return default
+
+def _pantry_get(pantry_id, basket, timeout=10, tries=3):
+    """(dict, None) on success; (None, None) if the basket doesn't exist yet; (None, err) otherwise.
+    Retries on Pantry's 429 rate-limit, honoring Retry-After."""
+    req = urllib.request.Request(_pantry_url(pantry_id, basket), headers=_pantry_headers())
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode()), None
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 404):    # Pantry returns 400 for a not-yet-created basket
+                return None, None
+            if e.code == 429 and attempt < tries - 1:
+                time.sleep(_pantry_retry_after(e))
+                continue
+            return None, ("rate-limited by Pantry — try again in a moment"
+                          if e.code == 429 else f"http {e.code}")
+        except Exception as e:
+            return None, str(e).split("]")[-1].strip()[:80] or "network error"
+
+def _pantry_put(pantry_id, basket, data, timeout=10, tries=3):
+    """POST replaces the basket contents wholesale. Returns None or an error string.
+    Retries on Pantry's 429 rate-limit, honoring Retry-After."""
+    body = json.dumps(data).encode()
+    for attempt in range(tries):
+        req = urllib.request.Request(_pantry_url(pantry_id, basket), data=body,
+                                     headers=_pantry_headers(), method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                r.read()
+                return None
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < tries - 1:
+                time.sleep(_pantry_retry_after(e))
+                continue
+            return ("rate-limited by Pantry — try again in a moment"
+                    if e.code == 429 else f"http {e.code}")
+        except Exception as e:
+            return str(e).split("]")[-1].strip()[:80] or "network error"
+
+
+class PoolStore:
+    """Read/write the encrypted shared-pool blob in a Pantry basket."""
+
+    def __init__(self, pantry_id, key, basket=POOL_BASKET):
+        self.pantry_id = pantry_id
+        self.key = key                # raw bytes
+        self.basket = basket
+
+    def load(self):
+        data, err = _pantry_get(self.pantry_id, self.basket)
+        if err:
+            raise RuntimeError(err)
+        if not data or not data.get("blob"):
+            return _empty_pool()
+        return json.loads(_pool_decrypt(self.key, data["blob"]).decode())
+
+    def save(self, pool):
+        pool["updatedAt"] = int(time.time())
+        ct = _pool_encrypt(self.key, json.dumps(pool).encode())
+        err = _pantry_put(self.pantry_id, self.basket, {"v": 1, "blob": ct})
+        if err:
+            raise RuntimeError(err)
+
+
+def _remote_config():
+    try:
+        with open(POOL_REMOTE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+def _save_remote_config(d):
+    os.makedirs(STORE_DIR, exist_ok=True)
+    tmp = POOL_REMOTE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=2)
+    os.replace(tmp, POOL_REMOTE)
+    try:
+        os.chmod(POOL_REMOTE, 0o600)      # holds the pool key — keep it private
+    except OSError:
+        pass
+
+def _clear_remote_config():
+    try:
+        os.remove(POOL_REMOTE)
+    except OSError:
+        pass
+
+def _store_from_config(cfg):
+    return PoolStore(cfg["pantryId"], _b64u_dec(cfg["key"]), cfg.get("basket", POOL_BASKET))
+
+# The proxy reads the selected account fresh so `pool use` reaches running
+# sessions instantly — but only actually re-parses the file when it changes.
+_SEL_CACHE = {"mtime": -1.0, "sid": None}
+
+def _selected_member_id():
+    try:
+        mtime = os.stat(POOL_REMOTE).st_mtime
+    except OSError:
+        return None
+    if mtime != _SEL_CACHE["mtime"]:
+        cfg = _remote_config() or {}
+        _SEL_CACHE["mtime"] = mtime
+        _SEL_CACHE["sid"] = cfg.get("selectedMemberId")
+    return _SEL_CACHE["sid"]
+
+
+class _Pool:
+    """Holds every account's token and decides which one serves each request.
+
+    Local mode (store=None) draws accounts from the Keychain; shared mode
+    (store set) draws them from an encrypted Pantry blob and also meters usage.
+    """
+
+    def __init__(self, mode, only=None, store=None, consumer_id=None):
         self.mode = mode if mode in ("failover", "balance") else "failover"
         self.only = only       # if set, serve exactly this one account (pinned session)
         self.lock = threading.Lock()
         self.cooldown = {}     # name -> epoch the account is usable again (after a 429)
         self.stats = {}        # name -> {"served", "failover", "last"}
         self.rr = -1           # round-robin cursor (balance mode)
-        self.accounts = []     # [{name, token, refresh, expiresAt}], active first
+        self.accounts = []     # [{name, member_id, token, refresh, expiresAt}], active first
+        self.store = store              # PoolStore for shared mode, else None
+        self.consumer_id = consumer_id  # our member id (who is spending), shared mode
+        self.usage_delta = {}           # member_id -> tally we've consumed since last flush
+        self.served_delta = {}          # member_id -> tally their token served since last flush
+        self.refresh_locks = {}         # name -> Lock, so parallel requests don't all
+                                        # burn the same single-use refresh token at once
         self.reload()
 
     def reload(self):
+        if self.store:
+            return self._reload_remote()
         idx = load_index()
         active = active_name(idx)
         names = sorted(idx["accounts"])
@@ -1469,6 +1706,7 @@ class _Pool:
                 continue
             accts.append({
                 "name": name,
+                "member_id": None,
                 "token": cred["accessToken"],
                 "refresh": cred.get("refreshToken"),
                 "expiresAt": cred.get("expiresAt"),
@@ -1478,11 +1716,129 @@ class _Pool:
             self.stats = {a["name"]: self.stats.get(
                 a["name"], {"served": 0, "failover": 0, "last": 0}) for a in accts}
 
+    def _reload_remote(self):
+        """Rebuild the account list from the encrypted shared-pool blob."""
+        try:
+            pool = self.store.load()
+        except Exception as e:
+            _pool_log(f"shared pool load failed: {e}")
+            return
+        with self.lock:                          # snapshot what we already hold
+            prev = {a["member_id"]: a for a in self.accounts}
+        accts, seen = [], {}
+        for mid, m in (pool.get("members") or {}).items():
+            rt = m.get("refreshToken")
+            if not rt:
+                continue
+            name = m.get("name") or (m.get("email") or mid).split("@")[0]
+            if name in seen:                     # keep display names unique for stats/cooldown
+                name = f"{name}-{mid[:4]}"
+            seen[name] = True
+            token, refresh, exp = m.get("accessToken"), rt, m.get("expiresAt")
+            # Don't clobber a token we rotated in memory with a staler copy from
+            # Pantry (a persist-back may still be in flight): keep the fresher one.
+            p = prev.get(mid)
+            if p and (p.get("expiresAt") or 0) > (exp or 0):
+                token, refresh, exp = p.get("token"), p.get("refresh"), p.get("expiresAt")
+            accts.append({
+                "name": name,
+                "member_id": mid,
+                "token": token,
+                "refresh": refresh,
+                "expiresAt": exp,
+            })
+        # our own contributed account serves first (spends our own limit before friends')
+        accts.sort(key=lambda a: a["member_id"] != self.consumer_id)
+        with self.lock:
+            self.accounts = accts
+            self.stats = {a["name"]: self.stats.get(
+                a["name"], {"served": 0, "failover": 0, "last": 0}) for a in accts}
+
+    def note_usage(self, server_name, in_tok, out_tok):
+        """Record a served request: charge the serving member and credit our spend."""
+        if not self.store:
+            return
+        with self.lock:
+            a = self._by_name(server_name)
+            sid = a.get("member_id") if a else None
+            for bucket, mid in ((self.served_delta, sid),
+                                (self.usage_delta, self.consumer_id)):
+                if not mid:
+                    continue
+                d = bucket.setdefault(mid, {"requests": 0, "inputTokens": 0, "outputTokens": 0})
+                d["requests"] += 1
+                d["inputTokens"] += in_tok or 0
+                d["outputTokens"] += out_tok or 0
+
+    def flush_usage(self):
+        """Merge accumulated usage deltas into the shared blob (best-effort, additive)."""
+        if not self.store:
+            return
+        with self.lock:
+            sd, ud = self.served_delta, self.usage_delta
+            self.served_delta, self.usage_delta = {}, {}
+        if not sd and not ud:
+            return
+
+        def _add(section, deltas):
+            for mid, d in deltas.items():
+                t = section.setdefault(mid, {"requests": 0, "inputTokens": 0, "outputTokens": 0})
+                t["requests"] += d["requests"]
+                t["inputTokens"] += d["inputTokens"]
+                t["outputTokens"] += d["outputTokens"]
+                t["lastAt"] = int(time.time())
+
+        try:
+            pool = self.store.load()
+            _add(pool.setdefault("served", {}), sd)
+            _add(pool.setdefault("usage", {}), ud)
+            self.store.save(pool)
+        except Exception as e:                   # put the deltas back so nothing is lost
+            _pool_log(f"usage flush failed: {e}")
+            with self.lock:
+                _add(self.served_delta, sd)
+                _add(self.usage_delta, ud)
+
+    def _persist_token_remote(self, member_id, token, refresh, expires_in):
+        try:
+            pool = self.store.load()
+            m = (pool.get("members") or {}).get(member_id)
+            if not m:
+                return
+            m["accessToken"] = token
+            if refresh:
+                m["refreshToken"] = refresh
+            if expires_in:
+                m["expiresAt"] = int((time.time() + expires_in) * 1000)
+            m["updatedAt"] = int(time.time())
+            self.store.save(pool)
+        except Exception as e:
+            _pool_log(f"shared token persist failed: {e}")
+
     def _by_name(self, name):
         for a in self.accounts:
             if a["name"] == name:
                 return a
         return None
+
+    def _by_member(self, member_id):
+        for a in self.accounts:
+            if a["member_id"] == member_id:
+                return a
+        return None
+
+    def selected_account(self):
+        """The account the member has chosen to serve from (shared pool).
+
+        Falls back to the member's own contributed account, then the first
+        available. Read fresh each call so `pool use` takes effect live."""
+        sid = _selected_member_id() or self.consumer_id
+        with self.lock:
+            if sid:
+                for a in self.accounts:
+                    if a["member_id"] == sid:
+                        return a
+            return self.accounts[0] if self.accounts else None
 
     def pick(self, exclude=()):
         """Name of the next account to try, or None if all are on cooldown."""
@@ -1516,31 +1872,65 @@ class _Pool:
             if a:
                 a["expiresAt"] = 0            # force token_for() to mint a new one
 
-    def token_for(self, name):
-        """A usable access token for `name`, refreshing it first if it's expiring."""
+    def _refresh_lock(self, name):
+        """Per-account lock so only one thread refreshes a given account at a time."""
         with self.lock:
-            a = self._by_name(name)
-            if not a:
-                return None
-            exp, tok, rt = a.get("expiresAt") or 0, a["token"], a.get("refresh")
+            lk = self.refresh_locks.get(name)
+            if lk is None:
+                lk = self.refresh_locks[name] = threading.Lock()
+            return lk
+
+    def token_for(self, name):
+        """A usable access token for `name`, refreshing it first if it's expiring.
+
+        Refreshes are serialized per account (refresh tokens are single-use, so
+        letting parallel requests refresh the same one would invalidate it)."""
+        def _current():
+            with self.lock:
+                a = self._by_name(name)
+                if not a:
+                    return None, None, None
+                return a.get("expiresAt") or 0, a["token"], a.get("refresh")
+
+        exp, tok, rt = _current()
+        if tok is None and rt is None:
+            return None
         if exp and exp / 1000 > time.time() + 60:
             return tok
         if not rt:
             return tok
-        data, _err = refresh_access_token(rt)
-        if not data or not data.get("access_token"):
-            return tok                        # keep old token; a 401 will retrigger refresh
-        new = data["access_token"]
-        with self.lock:
-            a = self._by_name(name)
-            if a:
-                a["token"] = new
-                if data.get("refresh_token"):
-                    a["refresh"] = data["refresh_token"]
-                if data.get("expires_in"):
-                    a["expiresAt"] = int((time.time() + data["expires_in"]) * 1000)
-        _pool_persist_token(name, new, data.get("refresh_token"), data.get("expires_in"))
-        return new
+
+        with self._refresh_lock(name):
+            # Another thread may have refreshed while we waited for the lock.
+            exp, tok, rt = _current()
+            if exp and exp / 1000 > time.time() + 60:
+                return tok
+            if not rt:
+                return tok
+            data, _err = refresh_access_token(rt)
+            if not data or not data.get("access_token"):
+                return tok                    # keep old token; a 401 will retrigger refresh
+            new = data["access_token"]
+            with self.lock:
+                a = self._by_name(name)
+                if a:
+                    a["token"] = new
+                    if data.get("refresh_token"):
+                        a["refresh"] = data["refresh_token"]
+                    if data.get("expires_in"):
+                        a["expiresAt"] = int((time.time() + data["expires_in"]) * 1000)
+                mid = a.get("member_id") if a else None
+            if self.store:
+                if mid:
+                    # persist the rotated token back to Pantry off the request path,
+                    # so a slow/rate-limited write never stalls the live request.
+                    threading.Thread(
+                        target=self._persist_token_remote,
+                        args=(mid, new, data.get("refresh_token"), data.get("expires_in")),
+                        daemon=True).start()
+            else:
+                _pool_persist_token(name, new, data.get("refresh_token"), data.get("expires_in"))
+            return new
 
     def snapshot(self):
         now = time.time()
@@ -1554,6 +1944,12 @@ class _Pool:
                     "failover": self.stats.get(a["name"], {}).get("failover", 0),
                 } for a in self.accounts],
             }
+
+
+# usage sniffing: input_tokens appears once (message_start), output_tokens is
+# cumulative in message_delta events — take the first input and the largest output.
+_RE_IN_TOK  = re.compile(rb'"input_tokens"\s*:\s*(\d+)')
+_RE_OUT_TOK = re.compile(rb'"output_tokens"\s*:\s*(\d+)')
 
 
 class PoolHandler(BaseHTTPRequestHandler):
@@ -1582,6 +1978,56 @@ class PoolHandler(BaseHTTPRequestHandler):
         if POOL is None or not POOL.accounts:
             return self._send_json(503, _err_body("no accounts available to pool"))
         body = self._read_body()
+        if POOL.store:                       # shared pool: one selected account, no auto-switch
+            return self._proxy_selected(body)
+        return self._proxy_failover(body)
+
+    def _proxy_selected(self, body):
+        """Serve every request from the ONE account the member has selected.
+
+        No round-robin (keeps prompt caching intact) and no automatic failover:
+        the selected account is refreshed in place if its token is expiring, but
+        if it's rate-limited or its token is dead we surface that to Claude Code
+        so the user can switch accounts manually with `pool use <name>`. The
+        selection is read fresh, so a `pool use` reaches running sessions with no
+        restart."""
+        acct = POOL.selected_account()
+        if not acct:
+            return self._send_json(503, _err_body(
+                "no pool account selected — run `claude-auth pool use <name>`"))
+        name = acct["name"]
+        token = POOL.token_for(name)
+        if not token:
+            POOL.reload()                    # maybe just joined by someone else
+            acct = POOL.selected_account()
+            token = POOL.token_for(acct["name"]) if acct else None
+            name = acct["name"] if acct else name
+        if not token:
+            return self._send_json(502, _err_body(
+                f"no usable token for '{name}' — switch with `claude-auth pool use <name>`"))
+        resp, conn, err = self._send(token, body)
+        if err:
+            return self._send_json(502, _err_body(f"pool could not reach the API ({err})"))
+        if resp.status in (401, 403):        # refresh the SAME account once (not a switch), retry
+            self._drain(resp, conn)
+            POOL.force_refresh(name)
+            token = POOL.token_for(name)
+            resp, conn, err = self._send(token, body) if token else (None, None, "no token")
+            if err:
+                return self._send_json(502, _err_body(f"pool could not reach the API ({err})"))
+            if resp.status in (401, 403):
+                _pool_log(f"{name}: token rejected — user must `pool use <other>` (no auto-switch)")
+        # stream whatever we got (200, or 401/429 so the user knows to switch) straight back,
+        # but only meter genuine successes — don't count a surfaced 401/429/5xx as "served".
+        ok_status = resp.status < 400
+        if ok_status:
+            POOL.note_served(name)
+        in_tok, out_tok = self._stream(resp, name)
+        if ok_status:
+            POOL.note_usage(name, in_tok, out_tok)
+        self._close(conn)
+
+    def _proxy_failover(self, body):
         tried, last = set(), None
         for _ in range(len(POOL.accounts)):
             name = POOL.pick(exclude=tried)
@@ -1598,9 +2044,16 @@ class PoolHandler(BaseHTTPRequestHandler):
             if resp.status in (401, 403):    # bad/expired token → refresh once, retry same acct
                 self._drain(resp, conn)
                 POOL.force_refresh(name)
-                resp, conn, err = self._send(POOL.token_for(name), body)
+                token = POOL.token_for(name)
+                resp, conn, err = self._send(token, body) if token else (None, None, "no token")
                 if err:
                     last = ("err", err)
+                    continue
+                if resp.status in (401, 403):   # STILL rejected → dead/rotated token, fail over
+                    POOL.mark_exhausted(name, 600)
+                    self._drain(resp, conn)
+                    last = ("401", name)
+                    _pool_log(f"{name}: token rejected (401/403) even after refresh — failing over")
                     continue
             if resp.status == 429:           # rate-limited → rest this account, fail over
                 POOL.mark_exhausted(name, _retry_after_secs(resp.headers))
@@ -1608,7 +2061,8 @@ class PoolHandler(BaseHTTPRequestHandler):
                 last = ("429", name)
                 continue
             POOL.note_served(name)           # success (or a real API error) → stream it back
-            self._stream(resp, name)
+            in_tok, out_tok = self._stream(resp, name)
+            POOL.note_usage(name, in_tok, out_tok)   # meter token usage (shared pool only)
             self._close(conn)
             return
         self._all_busy(last)
@@ -1634,7 +2088,9 @@ class PoolHandler(BaseHTTPRequestHandler):
         return h
 
     def _stream(self, resp, name):
-        """Relay the upstream response, byte for byte, flushing as it arrives (SSE-safe)."""
+        """Relay the upstream response, byte for byte, flushing as it arrives (SSE-safe).
+
+        Returns (input_tokens, output_tokens) sniffed from the stream for metering."""
         self.send_response(resp.status)
         for k, v in resp.getheaders():
             if k.lower() in _HOP_BY_HOP or k.lower() in ("content-length", "connection"):
@@ -1644,6 +2100,7 @@ class PoolHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+        in_tok, out_tok, carry = 0, 0, b""
         try:
             while True:
                 chunk = resp.read(65536)
@@ -1651,8 +2108,18 @@ class PoolHandler(BaseHTTPRequestHandler):
                     break
                 self.wfile.write(chunk)
                 self.wfile.flush()
+                # peek at usage without buffering the whole body; carry handles
+                # numbers split across chunk boundaries.
+                data = carry + chunk
+                im = _RE_IN_TOK.search(data)
+                if im and not in_tok:
+                    in_tok = int(im.group(1))
+                for om in _RE_OUT_TOK.finditer(data):
+                    out_tok = max(out_tok, int(om.group(1)))
+                carry = data[-256:]
         except Exception:
             pass
+        return in_tok, out_tok
 
     # ---- small helpers ----
     def _read_body(self):
@@ -1689,6 +2156,10 @@ class PoolHandler(BaseHTTPRequestHandler):
         if last and last[0] == "429":
             self._send_json(429, _err_body(
                 "all pooled accounts are at their rate limit — try again soon"))
+        elif last and last[0] == "401":
+            self._send_json(401, _err_body(
+                "all pooled tokens were rejected (expired or rotated) — the owners should "
+                "re-contribute with `claude-auth pool join <link>`"))
         else:
             detail = last[1] if last else "unknown error"
             self._send_json(502, _err_body(f"pool could not reach the API ({detail})"))
@@ -1778,7 +2249,15 @@ def _pool_wait_health(port, timeout=6.0):
 def _pool_serve(args):
     """The daemon: bind the proxy and serve until SIGTERM. Spawned by `pool start`."""
     global POOL
-    POOL = _Pool(args.mode or "failover")
+    remote = getattr(args, "remote", False)
+    if remote:
+        cfg = _remote_config()
+        if not cfg:
+            die("no shared pool joined — run `claude-auth pool join <link>` first")
+        POOL = _Pool(args.mode or "failover", store=_store_from_config(cfg),
+                     consumer_id=cfg.get("memberId"))
+    else:
+        POOL = _Pool(args.mode or "failover")
     if not POOL.accounts:
         _pool_log("no accounts to serve; exiting")
         die("no accounts available to pool")
@@ -1795,35 +2274,77 @@ def _pool_serve(args):
         pass
 
     def _bye(*_):
-        threading.Thread(target=httpd.shutdown, daemon=True).start()
+        # Do the final usage flush (a network call) OFF the signal handler so the
+        # handler returns immediately and `pool stop` never blocks on Pantry.
+        def _shutdown():
+            if remote:
+                try:
+                    POOL.flush_usage()
+                except Exception:
+                    pass
+            httpd.shutdown()
+        threading.Thread(target=_shutdown, daemon=True).start()
     signal.signal(signal.SIGTERM, _bye)
     signal.signal(signal.SIGINT, _bye)
 
+    if remote:
+        # periodically flush usage and re-pull the blob (new members / rotated
+        # tokens). Kept infrequent — Pantry's free tier rate-limits, and the
+        # live account SELECTION is read from a local file (not Pantry), so
+        # switching accounts never needs a network call.
+        def _sync_loop():
+            while True:
+                time.sleep(POOL_SYNC_SECS)
+                try:
+                    POOL.flush_usage()
+                except Exception:
+                    pass
+                try:
+                    POOL.reload()
+                except Exception:
+                    pass
+        threading.Thread(target=_sync_loop, daemon=True).start()
+
     _pool_log(f"serving 127.0.0.1:{port} mode={POOL.mode} "
-              f"accounts={[a['name'] for a in POOL.accounts]}")
+              f"{'shared' if remote else 'local'} accounts={[a['name'] for a in POOL.accounts]}")
     httpd.serve_forever()
     _pool_log("stopped")
 
 def _pool_start(args):
-    idx = load_index()
-    n = len(idx["accounts"])
-    if n == 0:
-        die("no saved accounts — run " + clay("claude-auth login") + " or " + clay("add") + " first")
+    # A joined shared pool is served by default; --local forces the Keychain pool.
+    cfg = None if getattr(args, "local", False) else _remote_config()
+    if cfg:
+        try:
+            n = len(_store_from_config(cfg).load().get("members", {}))
+        except Exception as e:
+            die(f"couldn't reach the shared pool: {e}")
+        if n == 0:
+            die("the shared pool has no members yet — run " + clay("claude-auth pool join <link>"))
+    else:
+        idx = load_index()
+        n = len(idx["accounts"])
+        if n == 0:
+            die("no saved accounts — run " + clay("claude-auth login") + " or " + clay("add") + " first")
     pid = _pool_pid()
     if pid:
         die(f"pool already running (pid {pid}) — run " + clay("claude-auth pool stop") + " first")
     port = args.port or DEFAULT_POOL_PORT
     mode = args.mode or "failover"
+    src = "shared pool" if cfg else "local accounts"
     info()
-    if n == 1:
-        warn("only 1 account saved — the pool needs 2+ to fail over")
-    step(f"Starting pool on {clay(f'127.0.0.1:{port}')} {dim('· mode ' + mode)}")
+    if n == 1 and not cfg:
+        warn(f"only 1 account in the {src} — the pool needs 2+ to fail over")
+    mode_note = "manual select" if cfg else "mode " + mode
+    step(f"Starting pool on {clay(f'127.0.0.1:{port}')} {dim('· ' + mode_note + ' · ' + src)}")
+    serve_cmd = [_bin_path(), "pool", "serve", "--port", str(port), "--mode", mode]
+    if cfg:
+        serve_cmd.append("--remote")
     logf = open(POOL_LOG, "a")
-    subprocess.Popen([_bin_path(), "pool", "serve", "--port", str(port), "--mode", mode],
-                     stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
+    subprocess.Popen(serve_cmd, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
     if not _pool_wait_health(port):
         die("pool did not come up — check " + POOL_LOG)
-    _pool_write_state({"port": port, "mode": mode, "startedAt": int(time.time())})
+    _pool_write_state({"port": port, "mode": mode, "startedAt": int(time.time()),
+                       "remote": bool(cfg)})
     if not args.no_wire:
         _wire_base_url(port)
         ok("Pool is live " + dim("· Claude Code will use it on next start"))
@@ -1832,6 +2353,15 @@ def _pool_start(args):
         ok(f"Pool is live on {clay(f'http://127.0.0.1:{port}')}")
         hint("point Claude Code at it:  " +
              clay(f"export ANTHROPIC_BASE_URL=http://127.0.0.1:{port}"))
+    if cfg:
+        sel = cfg.get("selectedMemberId")
+        try:
+            m = _store_from_config(cfg).load().get("members", {}).get(sel, {})
+            if m:
+                hint("serving from " + clay(m.get("name") or sel) +
+                     dim(" · switch live with ") + clay("claude-auth pool use <name>"))
+        except Exception:
+            pass
     hint("stop anytime with " + clay("claude-auth pool stop"))
     info()
 
@@ -1871,8 +2401,21 @@ def _pool_status(args):
         info()
         return
     port = st.get("port", DEFAULT_POOL_PORT)
+    remote = st.get("remote")
+    src = "shared pool" if remote else "local accounts"
+    mode_note = "manual select" if remote else "mode " + str(st.get("mode", "?"))
     info(IND + green("●") + " running   " +
-         dim(f"pid {pid} · 127.0.0.1:{port} · mode {st.get('mode', '?')}"))
+         dim(f"pid {pid} · 127.0.0.1:{port} · {mode_note} · {src}"))
+    if remote:
+        cfg = _remote_config() or {}
+        sel = cfg.get("selectedMemberId")
+        try:
+            m = _store_from_config(cfg).load().get("members", {}).get(sel, {})
+        except Exception:
+            m = {}
+        if m:
+            info(IND + "  " + clay("▶") + " serving " + bold(clay(m.get("name") or sel)) +
+                 dim("   · switch live with ") + clay("pool use <name>"))
     snap = None
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/__pool/health", timeout=2) as r:
@@ -1895,6 +2438,394 @@ def _pool_status(args):
         info(IND * 2 + yellow("!") + dim(" not wired — Claude Code won't use it (pool start --no-wire?)"))
     info()
 
+# ───────────────────── shared pool: create / join / leave / members ─────────
+
+def _my_live_credential():
+    """(cred dict, oauthAccount, userID) for the current login, or die."""
+    blob, _ = read_live_credential()
+    if blob is None:
+        die("no live Claude Code credential found — run " + clay("claude auth login") + " first")
+    cred = blob.get("claudeAiOauth", {})
+    if not cred.get("refreshToken"):
+        die("your live credential has no refresh token to contribute")
+    oauth, uid = current_identity()
+    return cred, oauth, uid
+
+def _member_entry(existing, cred, oauth):
+    email = oauth.get("emailAddress") or ""
+    return {
+        "name": existing.get("name") or (email.split("@")[0] if email else "member"),
+        "email": email or None,
+        "organizationName": oauth.get("organizationName"),
+        "subscriptionType": cred.get("subscriptionType"),
+        "refreshToken": cred.get("refreshToken"),
+        "accessToken": cred.get("accessToken"),
+        "expiresAt": cred.get("expiresAt"),
+        "joinedAt": existing.get("joinedAt", int(time.time())),
+        "updatedAt": int(time.time()),
+    }
+
+def _do_join(link):
+    """Contribute the live account to the pool `link` and save it locally."""
+    pantry_id, key = _pool_link_decode(link)
+    store = PoolStore(pantry_id, key)
+    cred, oauth, uid = _my_live_credential()
+    mid = oauth.get("accountUuid") or uid
+    if not mid:
+        die("couldn't determine your account id — try re-logging in")
+    try:
+        pool = store.load()
+    except Exception as e:
+        die(f"couldn't reach the pool: {e}")
+    members = pool.setdefault("members", {})
+    entry = _member_entry(members.get(mid, {}), cred, oauth)
+    members[mid] = entry
+    try:
+        store.save(pool)
+    except Exception as e:
+        die(f"couldn't write to the pool: {e}")
+    prev = _remote_config() or {}
+    _save_remote_config({
+        "link": _pool_link_encode(pantry_id, key),
+        "pantryId": pantry_id, "key": _b64u(key), "basket": POOL_BASKET,
+        "memberId": mid, "name": entry["name"],
+        # default to serving your own token, unless a selection already exists
+        "selectedMemberId": prev.get("selectedMemberId") or mid,
+    })
+    return entry, len(members)
+
+def cmd_pool_create(args):
+    pantry_id = args.target
+    info()
+    info(IND + bold(clay("Create shared pool")))
+    info()
+    if not pantry_id:
+        die("usage: " + clay("claude-auth pool create <pantry-id>") + "\n" +
+            IND + dim("get a free pantry id (one per pool) at ") + cyan("https://getpantry.cloud"))
+    key = secrets.token_bytes(32)
+    store = PoolStore(pantry_id, key)
+    try:
+        pool = store.load()                      # verifies the pantry id is reachable
+        store.save(pool)                         # initialize the (encrypted) basket
+    except Exception as e:
+        die(f"couldn't reach that pantry: {e} — double-check the id")
+    link = _pool_link_encode(pantry_id, key)
+    ok("Pool created and encrypted.")
+    info()
+    info(IND * 2 + bold("Share this link with people you trust:"))
+    info(IND * 2 + clay(link))
+    info()
+    warn("anyone with this link can read every token in the pool — share it privately")
+    info()
+    entry, n = _do_join(link)
+    ok(f"You joined as {bold(clay(entry['name']))} {dim('· ' + (entry['email'] or ''))}")
+    hint(f"members: {n}  ·  start pooling with " + clay("claude-auth pool start"))
+    info()
+
+def cmd_pool_join(args):
+    link = args.target
+    info()
+    info(IND + bold(clay("Join shared pool")))
+    info()
+    if not link:
+        die("usage: " + clay('claude-auth pool join "<pool-link>"'))
+    entry, n = _do_join(link)
+    ok(f"Joined the pool as {bold(clay(entry['name']))} {dim('· ' + (entry['email'] or ''))}")
+    hint(f"{n} member(s) · your token is now shared")
+    hint("start it with " + clay("claude-auth pool start") +
+         dim(", then pick who serves you with ") + clay("claude-auth pool use <name>"))
+    hint("leave with " + clay("claude-auth pool leave"))
+    info()
+
+def cmd_pool_leave(args):
+    cfg = _remote_config()
+    info()
+    if not cfg:
+        die("you haven't joined a shared pool")
+    if _pool_pid() and _pool_read_state().get("remote"):
+        die("the pool proxy is running — run " + clay("claude-auth pool stop") + " first")
+    store = _store_from_config(cfg)
+    try:
+        pool = store.load()
+        if cfg.get("memberId") in pool.get("members", {}):
+            del pool["members"][cfg["memberId"]]
+            store.save(pool)
+    except Exception as e:
+        warn(f"couldn't update the pool ({e}) — clearing local config anyway")
+    _clear_remote_config()
+    ok("Left the pool — your token was removed from the shared blob")
+    info()
+
+def cmd_pool_members(args):
+    cfg = _remote_config()
+    info()
+    if not cfg:
+        die("you haven't joined a shared pool — " + clay("claude-auth pool join <link>"))
+    try:
+        pool = _store_from_config(cfg).load()
+    except Exception as e:
+        die(f"couldn't reach the pool: {e}")
+    members = pool.get("members", {})
+    served = pool.get("served", {})
+    usage = pool.get("usage", {})
+    me = cfg.get("memberId")
+    selected = cfg.get("selectedMemberId") or me
+    info(IND + bold(clay("Pool members")) + dim(f"   ·   {len(members)} contributing"))
+    info()
+    if not members:
+        hint("no members yet")
+        info()
+        return
+
+    def _fmt(t):
+        r = t.get("requests", 0)
+        out = t.get("outputTokens", 0)
+        return f"{r} req · {out:,} out" if r else "—"
+
+    rows = []
+    for mid, m in sorted(members.items(), key=lambda kv: kv[1].get("name", "")):
+        rows.append({
+            "you": mid == me,
+            "sel": mid == selected,
+            "name": m.get("name") or mid[:8],
+            "plan": m.get("subscriptionType") or "—",
+            "served": _fmt(served.get(mid, {})),
+            "used": _fmt(usage.get(mid, {})),
+        })
+    wn = max(len("MEMBER"), max(len(r["name"]) for r in rows))
+    wp = max(len("PLAN"), max(len(r["plan"]) for r in rows))
+    ws = max(len("CONTRIBUTED"), max(len(r["served"]) for r in rows))
+    wu = max(len("CONSUMED"), max(len(r["used"]) for r in rows))
+    info(IND + "    " + bold(dim(vpad("MEMBER", wn))) + "  " + bold(dim(vpad("PLAN", wp))) +
+         "  " + bold(dim(vpad("CONTRIBUTED", ws))) + "  " + bold(dim(vpad("CONSUMED", wu))))
+    for r in rows:
+        dot = green("●") if r["you"] else dim("○")
+        arrow = clay("▶") if r["sel"] else " "
+        namec = (lambda s: bold(clay(s))) if r["sel"] else ink
+        info(IND + arrow + " " + dot + " " + namec(vpad(r["name"], wn)) + "  " +
+             dim(vpad(r["plan"], wp)) + "  " + ink(vpad(r["served"], ws)) +
+             "  " + ink(vpad(r["used"], wu)))
+    info()
+    info(IND + clay("▶") + dim(" serving your sessions   ") + green("●") + dim(" you    ○ other member"))
+    info(IND + dim("tallies are pool accounting, flushed every ~5 min (not live) · live limits: ") +
+         clay("claude-auth pool usage"))
+    info(IND + dim("switch which token serves you:  ") + clay("claude-auth pool use <name>"))
+    info()
+
+def cmd_pool_usage(args):
+    """Live rate-limit headroom for every pool member — the 'which token should I
+    switch to' view. Fetches each member's usage from Anthropic in parallel using
+    that member's own token (refreshing an expired one and saving it back)."""
+    cfg = _remote_config()
+    info()
+    if not cfg:
+        die("you haven't joined a shared pool — " + clay("claude-auth pool join <link>"))
+    store = _store_from_config(cfg)
+    try:
+        pool = store.load()
+    except Exception as e:
+        die(f"couldn't reach the pool: {e}")
+    members = pool.get("members", {})
+    if not members:
+        hint("no members yet")
+        info()
+        return
+    me = cfg.get("memberId")
+    selected = cfg.get("selectedMemberId") or me
+    dirty = {"v": False}
+
+    def _refresh_into(m):
+        d, _e = refresh_access_token(m.get("refreshToken"))
+        if d and d.get("access_token"):
+            m["accessToken"] = d["access_token"]
+            if d.get("refresh_token"):
+                m["refreshToken"] = d["refresh_token"]
+            if d.get("expires_in"):
+                m["expiresAt"] = int((time.time() + d["expires_in"]) * 1000)
+            dirty["v"] = True
+            return d["access_token"]
+        return None
+
+    def work(item):
+        mid, m = item
+        tok = m.get("accessToken")
+        exp = (m.get("expiresAt") or 0) / 1000
+        if m.get("refreshToken") and (not tok or not exp or exp < time.time() + 60):
+            tok = _refresh_into(m) or tok
+        if not tok:
+            return mid, None, "no token"
+        data, err = fetch_usage(tok)
+        if err == "expired" and m.get("refreshToken"):    # stale → refresh once, retry
+            tok = _refresh_into(m)
+            if tok:
+                data, err = fetch_usage(tok)
+        return mid, (parse_usage(data) if data else None), err
+
+    if _TTY:
+        sys.stdout.write(IND + clay("›") + " Fetching pool usage…")
+        sys.stdout.flush()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        results = {mid: (u, err) for mid, u, err in ex.map(work, list(members.items()))}
+    if dirty["v"]:                                        # save any tokens we refreshed
+        try:
+            store.save(pool)
+        except Exception:
+            pass
+    if _TTY:
+        sys.stdout.write("\r\033[2K")
+        sys.stdout.flush()
+
+    BARW = 10
+    rows = []
+    for mid, m in sorted(members.items(), key=lambda kv: kv[1].get("name", "")):
+        u, err = results.get(mid, (None, "?"))
+        rows.append({
+            "sel": mid == selected, "you": mid == me,
+            "name": m.get("name") or mid[:8],
+            "plan": m.get("subscriptionType") or "—",
+            "sess": _win_cell(u.get("session") if u else None, BARW),
+            "week": _win_cell(u.get("week") if u else None, BARW),
+            "note": "" if u else (err or "unavailable"),
+        })
+    wn = max(len("MEMBER"), max(len(r["name"]) for r in rows))
+    wp = max(len("PLAN"), max(len(r["plan"]) for r in rows))
+    ws = max(len("SESSION"), max(vlen(r["sess"]) for r in rows))
+    ww = max(len("WEEK"), max(vlen(r["week"]) for r in rows))
+    info(IND + bold(clay("Pool usage")) + dim("   ·   live rate-limit headroom per member"))
+    info()
+    info(IND + "    " + bold(dim(vpad("MEMBER", wn))) + "  " + bold(dim(vpad("PLAN", wp))) +
+         "  " + bold(dim(vpad("SESSION", ws))) + "  " + bold(dim(vpad("WEEK", ww))))
+    for r in rows:
+        dot = green("●") if r["you"] else dim("○")
+        arrow = clay("▶") if r["sel"] else " "
+        namec = (lambda s: bold(clay(s))) if r["sel"] else ink
+        line = (IND + arrow + " " + dot + " " + namec(vpad(r["name"], wn)) + "  " +
+                dim(vpad(r["plan"], wp)) + "  " + vpad(r["sess"], ws) + "  " + vpad(r["week"], ww))
+        if r["note"]:
+            line += "  " + yellow(r["note"])
+        info(line)
+    info()
+    info(IND + sev_color(10)("█") + dim(" <50%   ") + sev_color(60)("█") +
+         dim(" <80%   ") + sev_color(90)("█") + dim(" ≥80%") +
+         dim("      ▶ serving you"))
+    info(IND + dim("switch to the one with the most headroom:  ") + clay("claude-auth pool use <name>"))
+    info()
+
+def _resolve_member(pool, target):
+    """Match a user-typed target against pool members. Returns (member_id, member) or (None, None)."""
+    members = pool.get("members", {})
+    if target in members:                                   # exact member id
+        return target, members[target]
+    for mid, m in members.items():
+        name = m.get("name") or ""
+        if target == name or target == (m.get("email") or "").split("@")[0]:
+            return mid, m
+    return None, None
+
+def cmd_pool_use(args):
+    cfg = _remote_config()
+    info()
+    if not cfg:
+        die("you haven't joined a shared pool — " + clay("claude-auth pool join <link>"))
+    target = args.target
+    try:
+        pool = _store_from_config(cfg).load()
+    except Exception as e:
+        die(f"couldn't reach the pool: {e}")
+    if not target:
+        # no arg → list choices
+        cur = cfg.get("selectedMemberId")
+        info(IND + bold(clay("Pool account")) + dim("   ·   pick one to serve your sessions"))
+        info()
+        for mid, m in sorted(pool.get("members", {}).items(), key=lambda kv: kv[1].get("name", "")):
+            mark = green("●") if mid == cur else dim("○")
+            info(IND + mark + " " + (bold(clay(m.get("name", mid))) if mid == cur else ink(m.get("name", mid))))
+        info()
+        hint("switch with " + clay("claude-auth pool use <name>"))
+        info()
+        return
+    mid, m = _resolve_member(pool, target)
+    if not mid:
+        die(f"no pool member '{target}' — see " + clay("claude-auth pool members"))
+    cfg["selectedMemberId"] = mid
+    _save_remote_config(cfg)
+    ok(f"Now serving from {bold(clay(m.get('name') or mid))} {dim('· ' + (m.get('email') or ''))}")
+    if _pool_pid() and _pool_read_state().get("remote"):
+        hint("running Claude Code sessions switch to it on their next request " +
+             dim("— no restart needed"))
+    else:
+        hint("start the pool with " + clay("claude-auth pool start") + dim(" to route through it"))
+    info()
+
+def cmd_pool_remove(args):
+    """Remove any member's token from the shared pool (not just your own)."""
+    cfg = _remote_config()
+    info()
+    if not cfg:
+        die("you haven't joined a shared pool")
+    target = args.target
+    if not target:
+        die("usage: " + clay("claude-auth pool remove <name>") +
+            dim("   ·   see ") + clay("claude-auth pool members"))
+    store = _store_from_config(cfg)
+    try:
+        pool = store.load()
+    except Exception as e:
+        die(f"couldn't reach the pool: {e}")
+    mid, m = _resolve_member(pool, target)
+    if not mid:
+        die(f"no pool member '{target}' — see " + clay("claude-auth pool members"))
+    name = m.get("name") or mid
+    pool.get("members", {}).pop(mid, None)
+    pool.get("served", {}).pop(mid, None)
+    pool.get("usage", {}).pop(mid, None)
+    try:
+        store.save(pool)
+    except Exception as e:
+        die(f"couldn't write to the pool: {e}")
+    ok(f"Removed {bold(clay(name))} from the pool")
+    if mid == cfg.get("memberId"):
+        _clear_remote_config()
+        hint("that was your own membership — local pool config cleared")
+    elif cfg.get("selectedMemberId") == mid:
+        cfg["selectedMemberId"] = cfg.get("memberId")
+        _save_remote_config(cfg)
+        hint("it was the account serving you — now serving " + clay("your own") +
+             dim(" · change with ") + clay("pool use <name>"))
+    warn("this only un-shared the token — it does NOT revoke it. To invalidate it, " +
+         bold(name) + " must log out / re-login on their machine.")
+    info()
+
+def cmd_pool_clear(args):
+    """Wipe every member from the shared pool (the basket itself stays)."""
+    cfg = _remote_config()
+    info()
+    if not cfg:
+        die("you haven't joined a shared pool")
+    store = _store_from_config(cfg)
+    try:
+        n = len(store.load().get("members", {}))
+    except Exception as e:
+        die(f"couldn't reach the pool: {e}")
+    if not getattr(args, "yes", False):
+        warn(f"this removes ALL {n} member(s) from the shared pool — everyone must re-join")
+        try:
+            resp = input(IND + "  type " + clay("clear") + " to confirm: ")
+        except EOFError:
+            resp = ""
+        if resp.strip().lower() != "clear":
+            hint("aborted — nothing changed")
+            info()
+            return
+    try:
+        store.save(_empty_pool())
+    except Exception as e:
+        die(f"couldn't write to the pool: {e}")
+    _clear_remote_config()
+    ok("Pool cleared — all members removed, local config reset")
+    warn("un-sharing tokens does not revoke them; owners should log out to invalidate")
+    info()
+
 def cmd_pool(args):
     action = args.action or "status"
     if action == "serve":
@@ -1903,6 +2834,22 @@ def cmd_pool(args):
         _pool_start(args)
     elif action == "stop":
         _pool_stop(args)
+    elif action == "create":
+        cmd_pool_create(args)
+    elif action == "join":
+        cmd_pool_join(args)
+    elif action == "leave":
+        cmd_pool_leave(args)
+    elif action == "members":
+        cmd_pool_members(args)
+    elif action == "use":
+        cmd_pool_use(args)
+    elif action == "usage":
+        cmd_pool_usage(args)
+    elif action == "remove":
+        cmd_pool_remove(args)
+    elif action == "clear":
+        cmd_pool_clear(args)
     else:
         _pool_status(args)
 
@@ -2224,7 +3171,7 @@ _claude_auth() {
     switch|session|usage|rename|remove|rm|refresh)
       COMPREPLY=( $(compgen -W "$(claude-auth completion --names 2>/dev/null)" -- "$cur") ) ;;
     autoswitch) COMPREPLY=( $(compgen -W "on off status run" -- "$cur") ) ;;
-    pool) COMPREPLY=( $(compgen -W "start stop status" -- "$cur") ) ;;
+    pool) COMPREPLY=( $(compgen -W "start stop status create join leave members use usage remove clear" -- "$cur") ) ;;
     update) COMPREPLY=( $(compgen -W "--check --force" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") ) ;;
   esac
@@ -2241,7 +3188,7 @@ _claude_auth() {
     switch|session|usage|rename|remove|rm|refresh)
       compadd -- ${(f)"$(claude-auth completion --names 2>/dev/null)"} ;;
     autoswitch) compadd -- on off status run ;;
-    pool) compadd -- start stop status ;;
+    pool) compadd -- start stop status create join leave members use usage remove clear ;;
     update) compadd -- --check --force ;;
     completion) compadd -- bash zsh ;;
   esac
@@ -2264,7 +3211,13 @@ _COMMAND_REFERENCE = [
         ("usage",      "[name]",   "Show rate-limit usage across accounts", "--quiet"),
         ("refresh",    "[name]",   "Refresh stored tokens of inactive accounts", ""),
         ("autoswitch", "[on|off]", "Auto-switch when usage gets high", "status|run · --threshold --window --strategy"),
-        ("pool",       "[start|stop]", "Pool all accounts behind one auto-failover proxy", "status · --port --mode --no-wire"),
+        ("pool",       "[start|stop]", "Pool local accounts behind one auto-failover proxy", "status · --port --mode --no-wire --local"),
+        ("pool create", "<pantry-id>", "Create a shared friend pool (needs a free getpantry.cloud id)", ""),
+        ("pool join",  "<link>",      "Join a shared pool & contribute your token", ""),
+        ("pool use",   "<name>",      "Pick which pooled token serves you (live, no restart)", ""),
+        ("pool usage", "",            "Live rate-limit headroom for each pool member", ""),
+        ("pool members", "",          "Show pool members, selection & served/consumed tallies", "leave: pool leave"),
+        ("pool remove", "<name>",     "Remove any member's token from the pool", "clear: pool clear --yes"),
     ]),
     ("SETUP & INTEGRATION", [
         ("statusline", "",         "Compact status line for Claude Code", "--plain"),
@@ -2391,15 +3344,22 @@ def build_parser():
     asw.add_argument("--dry-run", action="store_true", help="decide and report, but don't switch")
     asw.set_defaults(func=cmd_autoswitch)
 
-    pl = sub.add_parser("pool", help="pool all accounts behind one auto-failover proxy")
+    pl = sub.add_parser("pool", help="pool accounts (local or a shared friend pool) behind one proxy")
     pl.add_argument("action", nargs="?", default="status",
-                    choices=["start", "stop", "status", "serve"])
+                    choices=["start", "stop", "status", "serve", "create", "join",
+                             "leave", "members", "use", "usage", "remove", "clear"])
+    pl.add_argument("target", nargs="?",
+                    help="pantry id (create), pool link (join), or member name (use/remove)")
+    pl.add_argument("--yes", action="store_true", help="skip the confirmation prompt (pool clear)")
     pl.add_argument("--port", type=int,
                     help=f"port to listen on (default {DEFAULT_POOL_PORT})")
     pl.add_argument("--mode", choices=["failover", "balance"],
                     help="failover = move only when rate-limited; balance = spread every request")
     pl.add_argument("--no-wire", action="store_true",
                     help="don't edit settings.json; just print the URL to set yourself")
+    pl.add_argument("--remote", action="store_true", help=argparse.SUPPRESS)
+    pl.add_argument("--local", action="store_true",
+                    help="serve the local-Keychain pool even if a shared pool is joined")
     pl.set_defaults(func=cmd_pool)
 
     se = sub.add_parser("session",
