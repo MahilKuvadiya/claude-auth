@@ -2093,20 +2093,31 @@ class PoolHandler(BaseHTTPRequestHandler):
             return None, None, str(e)
 
     def _upstream_headers(self, token):
+        # In shared-pool mode we sniff the response for token usage, but Anthropic
+        # gzip-compresses responses (even SSE) — so ask for an uncompressed body,
+        # otherwise the usage counts would always read 0. Only forced when we
+        # actually meter (store mode); the local pool/session keep compression.
+        meter = bool(POOL and POOL.store)
         h = {}
         for k in self.headers.keys():        # pass Claude Code's own headers through…
             lk = k.lower()
             if lk in _HOP_BY_HOP or lk in ("host", "authorization", "content-length"):
                 continue
+            if lk == "accept-encoding" and meter:
+                continue                     # drop it; we set identity below
             h[k] = self.headers[k]
         h["Host"] = _upstream_host()         # …but swap in our host + chosen account's token
         h["Authorization"] = f"Bearer {token}"
+        if meter:
+            h["Accept-Encoding"] = "identity"
         return h
 
     def _stream(self, resp, name):
         """Relay the upstream response, byte for byte, flushing as it arrives (SSE-safe).
 
-        Returns (input_tokens, output_tokens) sniffed from the stream for metering."""
+        Returns a dict of the four token counts sniffed from the (uncompressed)
+        stream for metering. Relies on _upstream_headers forcing identity encoding
+        in metering mode — otherwise the body is gzip and nothing matches."""
         self.send_response(resp.status)
         for k, v in resp.getheaders():
             if k.lower() in _HOP_BY_HOP or k.lower() in ("content-length", "connection"):
