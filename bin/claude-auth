@@ -28,7 +28,7 @@ import concurrent.futures
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 
-__version__ = "1.8.0"
+__version__ = "1.9.0"
 
 API_USAGE = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
@@ -411,6 +411,7 @@ def render_help():
         ("login",   "[name]",       "Sign in fresh, then save as a profile"),
         ("add",     "[name]",       "Save the currently logged-in account"),
         ("switch",  "[name]",       "Switch to a saved account"),
+        ("session", "<name>",       "Run one session pinned to an account (global login unchanged)"),
         ("usage",   "[name]",       "Show rate-limit usage across accounts"),
         ("autoswitch", "[on|off]",  "Auto-switch accounts when usage gets high"),
         ("pool",    "[start|stop]",  "Pool all accounts behind one auto-failover proxy"),
@@ -1436,8 +1437,9 @@ def _pool_persist_token(name, token, refresh, expires_in):
 class _Pool:
     """Holds every account's token and decides which one serves each request."""
 
-    def __init__(self, mode):
+    def __init__(self, mode, only=None):
         self.mode = mode if mode in ("failover", "balance") else "failover"
+        self.only = only       # if set, serve exactly this one account (pinned session)
         self.lock = threading.Lock()
         self.cooldown = {}     # name -> epoch the account is usable again (after a 429)
         self.stats = {}        # name -> {"served", "failover", "last"}
@@ -1449,7 +1451,9 @@ class _Pool:
         idx = load_index()
         active = active_name(idx)
         names = sorted(idx["accounts"])
-        if active in names:                      # serve from the active account first
+        if self.only:                            # pinned: serve only this account
+            names = [n for n in names if n == self.only]
+        elif active in names:                    # serve from the active account first
             names.remove(active)
             names.insert(0, active)
         accts = []
@@ -1902,6 +1906,91 @@ def cmd_pool(args):
     else:
         _pool_status(args)
 
+# ─────────────────────────── session (pinned) ─────────────────────────────
+#
+# `session` runs ONE Claude Code process as a chosen account without touching
+# the global login. On macOS the credential store is a single, process-global
+# Keychain item, so the only per-process isolation boundary is the network
+# request itself: we run the pool forwarder pinned to one account on an
+# ephemeral loopback port, and hand the child `claude` its own
+# ANTHROPIC_BASE_URL. A process env var overrides settings.json, so this also
+# wins over a running `pool`. Nothing is written to disk — the in-process
+# forwarder lives and dies with the session.
+
+def _strip_lead_dashdash(a):
+    """argparse REMAINDER keeps a literal leading '--'; drop it before exec."""
+    return a[1:] if a and a[0] == "--" else a
+
+def cmd_session(args):
+    global POOL
+    name = args.account
+    idx = load_index()
+
+    # (a) the account must exist …
+    if name not in idx["accounts"]:
+        die(f"no saved account {clay(name)} — see " + clay("claude-auth list"))
+
+    # (b) … and have a usable stored token, so the forwarder never 503s mid-flight
+    raw = kc_read(STORE_SERVICE, name)
+    has_token = False
+    if raw:
+        try:
+            has_token = bool(json.loads(raw).get("claudeAiOauth", {}).get("accessToken"))
+        except Exception:
+            has_token = False
+    if not has_token:
+        die(f"{clay(name)} has no stored token — run " + clay(f"claude-auth refresh {name}"))
+
+    # (c) pinned in-process forwarder on an OS-assigned ephemeral port
+    POOL = _Pool("failover", only=name)
+    if not POOL.accounts:
+        die(f"could not load a token for {clay(name)}")
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), PoolHandler)
+    httpd.daemon_threads = True
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    _pool_wait_health(port, timeout=3.0)
+    base = f"http://127.0.0.1:{port}"
+
+    # (d) --no-launch: keep the pinned proxy up for the user to point a tool at
+    if args.no_launch:
+        info()
+        ok(f"pinned proxy for {clay(name)} live on {clay(base)}")
+        hint("point a tool at it:  " + clay(f"export ANTHROPIC_BASE_URL={base}"))
+        hint("global login unchanged · Ctrl-C to stop")
+        try:
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        return
+
+    # (e) launch claude as a foreground child, pinned via its own environment
+    env = {**os.environ, "ANTHROPIC_BASE_URL": base}
+    cmd = ["claude", *_strip_lead_dashdash(args.claude_args or [])]
+    info()
+    step(f"Claude Code pinned to {clay(name)} " +
+         dim(f"· global login unchanged"))
+    try:
+        proc = subprocess.Popen(cmd, env=env)
+    except FileNotFoundError:
+        httpd.shutdown()
+        httpd.server_close()
+        die("`claude` CLI not found on PATH — is Claude Code installed?")
+    try:
+        while True:
+            try:
+                rc = proc.wait()      # Ctrl-C reaches claude directly (shared tty);
+                break                 # the parent just keeps waiting, never killing it
+            except KeyboardInterrupt:
+                continue
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    sys.exit(rc)
+
 # ─────────────────────────────── doctor ───────────────────────────────────
 
 # ──────────────────────────── self-update ─────────────────────────────────
@@ -2126,13 +2215,13 @@ _BASH_COMPLETION = r'''
 _claude_auth() {
   local cur prev cmds sub
   cur="${COMP_WORDS[COMP_CWORD]}"
-  cmds="login add list ls switch usage autoswitch pool refresh statusline current whoami rename remove rm doctor update completion help"
+  cmds="login add list ls switch session usage autoswitch pool refresh statusline current whoami rename remove rm doctor update completion help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     COMPREPLY=( $(compgen -W "$cmds" -- "$cur") ); return
   fi
   sub="${COMP_WORDS[1]}"
   case "$sub" in
-    switch|usage|rename|remove|rm|refresh)
+    switch|session|usage|rename|remove|rm|refresh)
       COMPREPLY=( $(compgen -W "$(claude-auth completion --names 2>/dev/null)" -- "$cur") ) ;;
     autoswitch) COMPREPLY=( $(compgen -W "on off status run" -- "$cur") ) ;;
     pool) COMPREPLY=( $(compgen -W "start stop status" -- "$cur") ) ;;
@@ -2146,10 +2235,10 @@ complete -F _claude_auth claude-auth
 _ZSH_COMPLETION = r'''
 _claude_auth() {
   local -a cmds
-  cmds=(login add list ls switch usage autoswitch pool refresh statusline current whoami rename remove rm doctor update completion)
+  cmds=(login add list ls switch session usage autoswitch pool refresh statusline current whoami rename remove rm doctor update completion)
   if (( CURRENT == 2 )); then compadd -- $cmds; return; fi
   case "${words[2]}" in
-    switch|usage|rename|remove|rm|refresh)
+    switch|session|usage|rename|remove|rm|refresh)
       compadd -- ${(f)"$(claude-auth completion --names 2>/dev/null)"} ;;
     autoswitch) compadd -- on off status run ;;
     pool) compadd -- start stop status ;;
@@ -2165,6 +2254,7 @@ _COMMAND_REFERENCE = [
         ("login",   "[name]",      "Sign in fresh and save as a profile", "--email --console --sso"),
         ("add",     "[name]",      "Save the currently logged-in account", "--force"),
         ("switch",  "[name]",      "Switch to a saved account", "--force --no-save"),
+        ("session", "<name>",      "Run one session pinned to an account", "-- <claude args> · --no-launch"),
         ("list",    "",            "List saved accounts", "alias: ls"),
         ("current", "",            "Show the active account", "alias: whoami"),
         ("rename",  "<old> <new>", "Rename a saved profile", ""),
@@ -2311,6 +2401,15 @@ def build_parser():
     pl.add_argument("--no-wire", action="store_true",
                     help="don't edit settings.json; just print the URL to set yourself")
     pl.set_defaults(func=cmd_pool)
+
+    se = sub.add_parser("session",
+                        help="run one Claude Code session pinned to an account (global login unchanged)")
+    se.add_argument("account", help="saved account to pin this session to")
+    se.add_argument("--no-launch", action="store_true",
+                    help="don't launch claude; keep a pinned proxy up to point a tool at (Ctrl-C stops)")
+    se.add_argument("claude_args", nargs="*",
+                    help="args passed through to `claude` (after a literal --, e.g. -- -p 'hi')")
+    se.set_defaults(func=cmd_session)
 
     rn = sub.add_parser("rename", help="rename a saved account")
     rn.add_argument("old")

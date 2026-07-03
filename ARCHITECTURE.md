@@ -297,6 +297,16 @@ Design notes:
 - **Streaming** is relayed chunk-by-chunk with `flush()` and `Connection: close`, so Server-Sent Events reach the client as they arrive. Hop-by-hop headers are stripped both directions (RFC 7230 §6.1).
 - **Blast radius is zero by design.** Everything binds `127.0.0.1` only, no secret is ever written outside the Keychain, and because `pool stop` restores the prior `ANTHROPIC_BASE_URL`, a failure to route just means Claude Code talks to the API directly as before.
 
+## 9.5 `session` — the forwarder, pinned to one process
+
+`session <account>` and `pool` are two account-selection *policies* over the same primitive: the local, OAuth-preserving, token-refreshing forwarder (`PoolHandler` + `_Pool.token_for`). `pool` fans across all accounts as a global, `settings.json`-wired, singleton daemon. `session` pins to **one** account for the lifetime of **one** `claude` process — expressed by a single `only=<name>` argument to `_Pool.reload()`, which filters the account list to that name so `pick()` only ever returns it.
+
+Why the mechanism is *forced*, not chosen: on macOS the credential store is a single process-global Keychain item, so there is no per-process credential to swap (`CLAUDE_CONFIG_DIR` relocates credentials only on Linux/Windows). The only isolation boundary available to one process is its network egress — so `session` redirects that one process via its own `ANTHROPIC_BASE_URL`.
+
+- **Process model.** No daemon, no pid/state/log files, no `settings.json` edit. `session` runs `ThreadingHTTPServer(("127.0.0.1", 0), …)` — an **ephemeral** OS-assigned port — on a background thread *inside the command itself*, launches `claude` as a foreground child with `env` extended by `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`, and tears the server down when the child exits. Because the wiring is a process env var, unlimited pinned sessions can run concurrently (each its own process/port/forwarder), and none of them collide with the `pool` daemon.
+- **Precedence (verified).** A *process* `ANTHROPIC_BASE_URL` overrides the `env` block of `settings.json`, so a pinned session wins even while `pool` is wired — no conflict, no settings mutation. Confirmed empirically against `claude` v2.1.198: a real session launched this way routed `POST /v1/messages?beta=true` through the forwarder, kept subscription-OAuth mode (`anthropic-beta: …oauth-2025-04-20…`, `Authorization: Bearer sk-ant-oat01-…`, no `x-api-key`), and the forwarder's bearer swap changed the serving account while the live Keychain item and `~/.claude.json` were byte-for-byte unchanged.
+- **Signal handling.** The parent never installs `SIG_IGN` for `SIGINT` (that would leak to the child, since Python's `restore_signals` doesn't cover it). Instead it `Popen`s `claude` and loops on `wait()`, swallowing `KeyboardInterrupt`: Ctrl-C reaches `claude` directly via the shared tty and the parent just keeps waiting rather than killing it.
+
 ## 10. The `security` CLI surface used
 
 | Operation | Command |
@@ -312,6 +322,6 @@ The macOS account name on the live item is detected dynamically (falling back to
 
 - **macOS only.** Linux Claude Code stores credentials in `~/.claude/.credentials.json` (plaintext). A Linux backend would swap the `kc_*` functions for file operations; the rest of the architecture (index, identity swap, auto-sync) carries over unchanged.
 - **`-w "<secret>"` exposure.** The secret is passed as a process argument, so it's briefly visible to `ps` for the same user during a write. Local-only and transient; eliminating it would require a Keychain API binding rather than the `security` CLI.
-- **New-session scope (for `switch`/`autoswitch`).** Changing the on-disk credential doesn't reach a process that's already running. `pool` is the answer when in-session switching is needed — it routes per request instead of swapping the credential.
-- **`pool` depends on `ANTHROPIC_BASE_URL` routing.** Pooling only works if Claude Code honors the base-URL override for the active auth mode. If it doesn't, the proxy receives no traffic; this is detectable (`pool status`, `doctor`) and non-destructive (`pool stop` restores settings).
+- **New-session scope (for `switch`/`autoswitch`).** Changing the on-disk credential doesn't reach a process that's already running. `pool` (route per request across accounts) or `session` (pin one process to one account) is the answer when the on-disk swap won't do.
+- **`pool`/`session` depend on `ANTHROPIC_BASE_URL` routing.** They only work if Claude Code honors the base-URL override for the active auth mode. Verified against v2.1.198 (a real subscription session routes through the loopback forwarder in OAuth mode); if a future version stopped honoring it the proxy would simply receive no traffic — detectable (`pool status`, `doctor`) and non-destructive.
 - **`pool --mode balance` and subscription terms.** Serving one workflow from several subscription accounts may conflict with Anthropic's terms around rate limits; `failover` mode (one account at a time) mirrors manual switching and is the conservative default.

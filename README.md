@@ -195,6 +195,30 @@ Auto-switch installs **two** hooks: a `Stop` hook (idle checkpoint, detached/zer
 
 Check status any time with `claude-auth autoswitch status`, preview a decision with `claude-auth autoswitch run --force --dry-run`, and turn it off with `claude-auth autoswitch off` (which removes both hooks).
 
+### Run one session as a specific account: `session`
+
+`switch` changes the account for **everything** — it swaps the shared credential on disk, so every Claude Code session on the machine follows. Sometimes you want the opposite: run **one** session as a specific account while your global login and every other session stay exactly as they are.
+
+`claude-auth session <account>` does that. It launches Claude Code for you, pinned to the account you named, and leaves the Keychain and `~/.claude.json` untouched:
+
+```console
+$ claude-auth session work
+
+  › Claude Code pinned to work · global login unchanged
+  <interactive Claude Code session, authenticated as work>
+```
+
+Pass arguments straight through to `claude` after a `--`:
+
+```console
+$ claude-auth session work -- --resume
+$ claude-auth session work -- -p "summarize this repo"
+```
+
+**How it stays scoped to just that session:** on macOS the credential lives in a single, machine-wide Keychain item, so there's no per-process credential to swap. Instead, `session` runs a tiny loopback proxy pinned to the one account (on an ephemeral port, in-process — no daemon, no files) and hands *only that `claude` child* its own `ANTHROPIC_BASE_URL`. A process environment variable overrides `settings.json`, so this cleanly wins even if `pool` is running. When the session ends, the proxy ends with it. Nothing global is ever written.
+
+Want to point your own tool at it instead of launching Claude Code? `claude-auth session <account> --no-launch` keeps the pinned proxy up and prints the `ANTHROPIC_BASE_URL` to export (Ctrl-C to stop). You can run as many pinned sessions at once as you like — each is its own process on its own port.
+
 ### Pool all accounts into one — no restarts: `pool`
 
 `autoswitch` is great, but it has one rough edge: a switch only takes effect on your **next** Claude Code session. `pool` removes that edge entirely.
