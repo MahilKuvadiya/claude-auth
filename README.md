@@ -297,6 +297,44 @@ Admin: `pool remove <name>` drops any member, `pool leave` removes yourself, `po
 
 > **⚠️ Anthropic's terms:** pooling several people's subscriptions to serve one workflow may run against Anthropic's subscription terms (around circumventing rate limits). Use it with people you trust and at your own discretion.
 
+### Find a session: `sessions`
+
+`claude-auth sessions` lists your recent Claude Code sessions straight from disk — no proxy, no setup:
+
+```console
+$ claude-auth sessions
+
+  Sessions   ·   3 recent
+
+  ┌───┬──────────┬─────────────┬─────────┬──────────────────────────┬──────┬─────────┐
+  │   │ ID       │ PROJECT     │ BRANCH  │ TITLE                    │ CTX  │ IDLE    │
+  ├───┼──────────┼─────────────┼─────────┼──────────────────────────┼──────┼─────────┤
+  │ ● │ 76ba159f │ ai-chatbot  │ develop │ fix-discovery-failures   │ 375k │ 2m ago  │
+  │ ○ │ 262eb4da │ shru        │ main    │ case-study-detail-pages  │ 705k │ 17m ago │
+  └───┴──────────┴─────────────┴─────────┴──────────────────────────┴──────┴─────────┘
+
+  ● kept warm    ○ not warmed
+```
+
+Each row is a real session with its project, git branch, auto-title, context size, and idle time. The short id (or a project name) is what you hand to `keep-warm`. `●` marks sessions the keep-warm proxy has captured.
+
+### Keep an idle session's cache warm: `keep-warm`
+
+Claude Code caches your conversation with a **1-hour** TTL; step away longer and the next turn re-sends the whole conversation at full price (re-consuming your rate limit). `keep-warm` avoids that: while a session sits idle, a local proxy replays its last request as a cheap **cache read** (~0.1× the context) every ~50 minutes, refreshing the 1-hour timer so returning is cheap instead of a full re-pay.
+
+```console
+$ claude-auth keep-warm start          # starts the proxy, wires ANTHROPIC_BASE_URL
+$ claude-auth sessions                 # find the session id
+$ claude-auth keep-warm add ai-chatbot # warm it (by project, id, or --last)
+$ claude-auth keep-warm status
+  ● running   pid 40127 · 127.0.0.1:8849 · interval 50m · cap 8h
+  ▶ 76ba159f  ai-chatbot  captured  · 3 pings · 123,450 read tok
+```
+
+**Idle-only:** while you're actively working, your real turns keep the cache warm for free — pings only fire after ~50 minutes of no activity, and stop after 8h idle (`--interval`, `--max` to tune). It's transparent: each session stays on its own account; nothing is swapped.
+
+> **Two things to know.** (1) A session must **route through the proxy** to be warmable — after `keep-warm start`, only sessions **started from then on** are captured (a session already running outside the proxy can't be grabbed retroactively). (2) It's mutually exclusive with `pool` (both use `ANTHROPIC_BASE_URL`). Why it must be a proxy: the exact cacheable prefix (system prompt + tools) isn't stored on disk — only the live request has it — so a session can only be warmed from bytes seen in the request path.
+
 ### Keep every account's usage live: `refresh`
 
 A saved account's access token is short-lived (~hours), so an account you haven't touched in a while can show a stale snapshot. `claude-auth refresh` exchanges each inactive account's refresh token for a fresh one (Anthropic's `POST /v1/oauth/token`), so `usage` stays live and switching never lands on a dead token. It only touches **inactive** accounts — the active one is owned by Claude Code and left alone. `usage` also auto-refreshes an account's token on demand if it returns expired.

@@ -32,7 +32,7 @@ import concurrent.futures
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 
-__version__ = "1.10.0"
+__version__ = "1.11.0"
 
 API_USAGE = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
@@ -427,6 +427,8 @@ def render_help():
         ("usage",   "[name]",       "Show rate-limit usage across accounts"),
         ("autoswitch", "[on|off]",  "Auto-switch accounts when usage gets high"),
         ("pool",    "[start|stop]",  "Pool all accounts behind one auto-failover proxy"),
+        ("sessions", "",            "List your Claude Code sessions (find a session id)"),
+        ("keep-warm", "[add|list]",  "Keep an idle session's prompt cache alive"),
         ("refresh", "[name]",       "Refresh stored tokens of inactive accounts"),
         ("statusline", "",          "Compact status line for Claude Code"),
         ("list",    "",             "List saved accounts" + dim("  (alias: ls)")),
@@ -775,6 +777,189 @@ def cmd_current(args):
         info(IND * 2 + dim("run ") + clay("claude-auth add") + dim(" to save it"))
     else:
         hint("not logged in")
+    info()
+
+# ─────────────────────────── session discovery ────────────────────────────
+# Claude Code writes one transcript per session at
+#   ~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl
+# `sessions` reads those straight off disk (no proxy needed) so you can find the
+# session id to hand to `keep-warm add`.
+
+PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
+
+def _read_session_meta(path):
+    """Cheap per-session metadata (cwd, gitBranch, title, context) without loading
+    the whole (possibly 40 MB) transcript — tail for the freshest values, head only
+    if we still need a title."""
+    meta = {"cwd": None, "branch": None, "title": None, "fp": None, "ctx": 0}
+
+    def scan(text, want_prompt=False):
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                o = json.loads(line)
+            except Exception:
+                continue
+            if o.get("cwd"):
+                meta["cwd"] = o["cwd"]
+            if o.get("gitBranch"):
+                meta["branch"] = o["gitBranch"]
+            if o.get("aiTitle"):
+                meta["title"] = o["aiTitle"]
+            msg = o.get("message") if isinstance(o.get("message"), dict) else None
+            u = (msg or {}).get("usage") or {}
+            if u:
+                c = ((u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0)
+                     + (u.get("cache_creation_input_tokens") or 0))
+                if c:
+                    meta["ctx"] = c
+            if want_prompt and not meta["fp"] and o.get("type") == "user" and msg:
+                c = msg.get("content")
+                if isinstance(c, str):
+                    meta["fp"] = c
+                elif isinstance(c, list):
+                    for b in c:
+                        if isinstance(b, dict) and b.get("type") == "text" and b.get("text"):
+                            meta["fp"] = b["text"]
+                            break
+
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > 131072:
+                f.seek(-131072, 2)
+                scan(f.read().decode("utf-8", "ignore"))
+                if not meta["title"]:                 # look at the head for a first prompt
+                    f.seek(0)
+                    scan(f.read(65536).decode("utf-8", "ignore"), want_prompt=True)
+            else:
+                scan(f.read().decode("utf-8", "ignore"), want_prompt=True)
+    except Exception:
+        pass
+    return meta
+
+def _list_sessions(limit=25):
+    """Recent Claude Code sessions, newest first. Each: id, project, branch, title, ctx, mtime."""
+    files = []
+    try:
+        for d in os.listdir(PROJECTS_DIR):
+            dp = os.path.join(PROJECTS_DIR, d)
+            if not os.path.isdir(dp):
+                continue
+            for fn in os.listdir(dp):
+                if not fn.endswith(".jsonl"):
+                    continue
+                p = os.path.join(dp, fn)
+                try:
+                    files.append((os.path.getmtime(p), p, fn[:-6]))
+                except OSError:
+                    continue
+    except OSError:
+        return []
+    files.sort(reverse=True)
+    out = []
+    for mt, p, sid in files[:limit]:
+        m = _read_session_meta(p)
+        title = (m["title"] or m["fp"] or "").strip().replace("\n", " ")
+        out.append({
+            "id": sid,
+            "project": os.path.basename(m["cwd"]) if m["cwd"] else "—",
+            "branch": m["branch"] or "—",
+            "title": title or "—",
+            "ctx": m["ctx"],
+            "mtime": mt,
+        })
+    return out
+
+def _resolve_session(selector, sessions=None):
+    """Resolve a user selector (full id | id-prefix | project name) to a session id.
+    Returns (id_or_None, candidates). `--last` is handled by the caller."""
+    sessions = sessions if sessions is not None else _list_sessions(limit=500)
+    if not sessions:
+        return None, []
+    for s in sessions:                                    # exact id
+        if s["id"] == selector:
+            return s["id"], []
+    pref = [s for s in sessions if s["id"].startswith(selector)]   # unique id prefix
+    if len(pref) == 1:
+        return pref[0]["id"], []
+    if len(pref) > 1:
+        return None, pref
+    proj = [s for s in sessions if s["project"] == selector]        # project name
+    if len(proj) == 1:
+        return proj[0]["id"], []
+    if len(proj) > 1:
+        return proj[0]["id"], proj      # most-recent for that project wins; surface the rest
+    return None, []
+
+def _keepwarm_captured_ids():
+    """Session ids the running keep-warm daemon has captured (drives the ● marker)."""
+    if not _kw_pid():
+        return set()
+    snap, _ = _kw_snapshot()
+    return set(snap.keys())
+
+def cmd_sessions(args):
+    sessions = _list_sessions(limit=getattr(args, "limit", None) or 25)
+    info()
+    if not sessions:
+        hint("No Claude Code sessions found on disk.")
+        info()
+        return
+    captured = _keepwarm_captured_ids()
+
+    def fmt_ctx(c):
+        return f"{c // 1000}k" if c >= 1000 else (str(c) if c else "—")
+
+    rows = []
+    for s in sessions:
+        t = s["title"]
+        rows.append({
+            "warm": s["id"] in captured,
+            "id": s["id"][:8],
+            "project": s["project"],
+            "branch": s["branch"],
+            "title": (t[:38] + "…") if len(t) > 39 else t,
+            "ctx": fmt_ctx(s["ctx"]),
+            "idle": rel_time(int(s["mtime"])),
+        })
+    w_id = max(len("ID"),      max(len(r["id"]) for r in rows))
+    w_pr = max(len("PROJECT"), max(len(r["project"]) for r in rows))
+    w_br = max(len("BRANCH"),  max(len(r["branch"]) for r in rows))
+    w_ti = max(len("TITLE"),   max(len(r["title"]) for r in rows))
+    w_cx = max(len("CTX"),     max(len(r["ctx"]) for r in rows))
+    w_il = max(len("IDLE"),    max(len(r["idle"]) for r in rows))
+    widths = [1, w_id, w_pr, w_br, w_ti, w_cx, w_il]
+
+    def border(l, m, rt):
+        return dim(l + m.join("─" * (w + 2) for w in widths) + rt)
+
+    def line(cells):
+        return IND + dim("│") + dim("│").join(cells) + dim("│")
+
+    H = lambda s: bold(dim(s))
+    info(IND + bold(clay("Sessions")) + dim(f"   ·   {len(rows)} recent"))
+    info()
+    info(IND + border("┌", "┬", "┐"))
+    info(line([_cell("", 1, dim), _cell("ID", w_id, H), _cell("PROJECT", w_pr, H),
+               _cell("BRANCH", w_br, H), _cell("TITLE", w_ti, H), _cell("CTX", w_cx, H),
+               _cell("IDLE", w_il, H)]))
+    info(IND + border("├", "┼", "┤"))
+    for r in rows:
+        dot = green("●") if r["warm"] else dim("○")
+        info(line([" " + dot + " ",
+                   _cell(r["id"], w_id, clay),
+                   _cell(r["project"], w_pr, ink),
+                   _cell(r["branch"], w_br, dim),
+                   _cell(r["title"], w_ti, ink),
+                   _cell(r["ctx"], w_cx, dim),
+                   _cell(r["idle"], w_il, dim)]))
+    info(IND + border("└", "┴", "┘"))
+    info()
+    info(IND + green("●") + dim(" kept warm") + "    " + dim("○ not warmed"))
+    info(IND + dim("pick by id, prefix, or project:  ") + clay("claude-auth keep-warm add <id|project>"))
     info()
 
 def _token_for(name, idx, active):
@@ -1148,6 +1333,15 @@ def _as_log(msg):
 def _bin_path():
     return shutil.which("claude-auth") or os.path.join(HOME, ".local/bin/claude-auth")
 
+def _self_bin():
+    """Path to re-spawn a same-version child daemon: the running script itself if it's
+    executable (so `keep-warm start` spawns the exact version you invoked, not a stale
+    installed copy), else the installed binary."""
+    me = os.path.realpath(os.path.abspath(sys.argv[0] or ""))
+    if me and os.path.isfile(me) and os.access(me, os.X_OK):
+        return me
+    return _bin_path()
+
 def _hook_command(detached):
     base = f"{_bin_path()} autoswitch run --quiet"
     return f"nohup {base} >/dev/null 2>&1 &" if detached else base
@@ -1413,6 +1607,33 @@ def _retry_after_secs(headers):
             except ValueError:
                 pass
     return 60
+
+def _forward_headers(src, token=None, meter=False):
+    """Build upstream headers from a client request's headers.
+
+    `token` given → swap in `Authorization: Bearer <token>` (pooled/warm account).
+    `token` None → pass the client's own Authorization through unchanged (transparent
+    mode, used by keep-warm capture). Always drops hop-by-hop / host / content-length
+    (http.client recomputes Content-Length from the body). `meter` forces an
+    uncompressed response so token counts are sniffable. `src` may be a live handler
+    headers object or a captured dict."""
+    drop = set(_HOP_BY_HOP) | {"host", "content-length"}
+    if token is not None:
+        drop.add("authorization")
+    h = {}
+    for k in src.keys():
+        lk = k.lower()
+        if lk in drop:
+            continue
+        if lk == "accept-encoding" and meter:
+            continue
+        h[k] = src[k]
+    h["Host"] = _upstream_host()
+    if token is not None:
+        h["Authorization"] = f"Bearer {token}"
+    if meter:
+        h["Accept-Encoding"] = "identity"
+    return h
 
 def _pool_log(msg):
     try:
@@ -2094,23 +2315,9 @@ class PoolHandler(BaseHTTPRequestHandler):
 
     def _upstream_headers(self, token):
         # In shared-pool mode we sniff the response for token usage, but Anthropic
-        # gzip-compresses responses (even SSE) — so ask for an uncompressed body,
-        # otherwise the usage counts would always read 0. Only forced when we
-        # actually meter (store mode); the local pool/session keep compression.
-        meter = bool(POOL and POOL.store)
-        h = {}
-        for k in self.headers.keys():        # pass Claude Code's own headers through…
-            lk = k.lower()
-            if lk in _HOP_BY_HOP or lk in ("host", "authorization", "content-length"):
-                continue
-            if lk == "accept-encoding" and meter:
-                continue                     # drop it; we set identity below
-            h[k] = self.headers[k]
-        h["Host"] = _upstream_host()         # …but swap in our host + chosen account's token
-        h["Authorization"] = f"Bearer {token}"
-        if meter:
-            h["Accept-Encoding"] = "identity"
-        return h
+        # gzip-compresses responses (even SSE) — so ask for an uncompressed body
+        # (meter=True) or the usage counts would always read 0.
+        return _forward_headers(self.headers, token=token, meter=bool(POOL and POOL.store))
 
     def _stream(self, resp, name):
         """Relay the upstream response, byte for byte, flushing as it arrives (SSE-safe).
@@ -3229,7 +3436,7 @@ _BASH_COMPLETION = r'''
 _claude_auth() {
   local cur prev cmds sub
   cur="${COMP_WORDS[COMP_CWORD]}"
-  cmds="login add list ls switch session usage autoswitch pool refresh statusline current whoami rename remove rm doctor update completion help"
+  cmds="login add list ls switch session sessions keep-warm usage autoswitch pool refresh statusline current whoami rename remove rm doctor update completion help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     COMPREPLY=( $(compgen -W "$cmds" -- "$cur") ); return
   fi
@@ -3238,6 +3445,7 @@ _claude_auth() {
     switch|session|usage|rename|remove|rm|refresh)
       COMPREPLY=( $(compgen -W "$(claude-auth completion --names 2>/dev/null)" -- "$cur") ) ;;
     autoswitch) COMPREPLY=( $(compgen -W "on off status run" -- "$cur") ) ;;
+    keep-warm) COMPREPLY=( $(compgen -W "start stop status list add rm --last --interval --max" -- "$cur") ) ;;
     pool) COMPREPLY=( $(compgen -W "start stop status create join leave members use usage remove clear" -- "$cur") ) ;;
     update) COMPREPLY=( $(compgen -W "--check --force" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") ) ;;
@@ -3249,12 +3457,13 @@ complete -F _claude_auth claude-auth
 _ZSH_COMPLETION = r'''
 _claude_auth() {
   local -a cmds
-  cmds=(login add list ls switch session usage autoswitch pool refresh statusline current whoami rename remove rm doctor update completion)
+  cmds=(login add list ls switch session sessions keep-warm usage autoswitch pool refresh statusline current whoami rename remove rm doctor update completion)
   if (( CURRENT == 2 )); then compadd -- $cmds; return; fi
   case "${words[2]}" in
     switch|session|usage|rename|remove|rm|refresh)
       compadd -- ${(f)"$(claude-auth completion --names 2>/dev/null)"} ;;
     autoswitch) compadd -- on off status run ;;
+    keep-warm) compadd -- start stop status list add rm --last --interval --max ;;
     pool) compadd -- start stop status create join leave members use usage remove clear ;;
     update) compadd -- --check --force ;;
     completion) compadd -- bash zsh ;;
@@ -3285,6 +3494,12 @@ _COMMAND_REFERENCE = [
         ("pool usage", "",            "Live rate-limit headroom for each pool member", ""),
         ("pool members", "",          "Members + per-type token tallies (in/out/cache) contributed & consumed", "--live · leave: pool leave"),
         ("pool remove", "<name>",     "Remove any member's token from the pool", "clear: pool clear --yes"),
+        ("sessions",   "",            "List your Claude Code sessions (find a session id)", "--limit"),
+        ("keep-warm start", "",       "Start the warming proxy & wire ANTHROPIC_BASE_URL (route sessions through it)", "--interval --max --no-wire"),
+        ("keep-warm add", "<id|project>", "Warm a session (by id, id-prefix, project, or --last)", ""),
+        ("keep-warm rm", "<id|project>", "Stop warming a session", ""),
+        ("keep-warm status", "",      "Show warmed sessions + pings/tokens spent", "alias: list"),
+        ("keep-warm stop", "",        "Stop the warming proxy & restore settings.json", ""),
     ]),
     ("SETUP & INTEGRATION", [
         ("statusline", "",         "Compact status line for Claude Code", "--plain"),
@@ -3347,6 +3562,479 @@ class BrandParser(argparse.ArgumentParser):
     def error(self, message):
         die(message + dim("   ·   see ") + clay("claude-auth --help"), code=2)
 
+# ═══════════════════════════════ keep-warm ═════════════════════════════════
+# Keep a *specific* Claude Code session's prompt cache alive. The 1-hour cache
+# TTL is refreshed by any read (proven empirically), so while a session sits
+# idle we replay its last request — max_tokens rewritten to 1, prefix bytes
+# untouched → a cheap cache READ — every ~50 min. We can only warm a session
+# whose traffic flows through this proxy: the exact cacheable prefix (system +
+# tools) isn't stored on disk, only seen live in the request path.
+
+KW_PID   = os.path.join(STORE_DIR, "keepwarm.pid")
+KW_STATE = os.path.join(STORE_DIR, "keepwarm.json")   # {port, startedAt, interval, max, marked:[...]}
+KW_LOG   = os.path.join(STORE_DIR, "keepwarm.log")
+DEFAULT_KW_PORT     = 8849                 # pool uses 8848
+KW_INTERVAL_DEFAULT = 50 * 60              # ping after this much idle (safely < 60-min TTL)
+KW_MAX_DEFAULT      = 8 * 3600             # stop warming a session after this much continuous idle
+KW_CHECK_SECS       = 30                   # how often the warm loop wakes
+
+KWSTORE = None   # live _SessionStore, set inside the `keep-warm serve` daemon
+
+def _kw_log(msg):
+    try:
+        with open(KW_LOG, "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except OSError:
+        pass
+
+class _SessionStore:
+    """Per-session captured requests (keyed by X-Claude-Code-Session-Id) + warm tallies."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.sessions = {}   # sid -> {command,path,body,headers,account_uuid,last_real,last_touch,pings,readTokens}
+
+    def remember(self, sid, command, path, body, headers, account_uuid):
+        if not sid:
+            return
+        now = time.time()
+        with self.lock:
+            s = self.sessions.setdefault(sid, {"pings": 0, "readTokens": 0})
+            s.update(command=command, path=path, body=body, headers=headers,
+                     account_uuid=account_uuid, last_real=now, last_touch=now)
+
+    def get(self, sid):
+        with self.lock:
+            s = self.sessions.get(sid)
+            return dict(s) if s else None
+
+    def note_ping(self, sid, read_tokens):
+        with self.lock:
+            s = self.sessions.get(sid)
+            if s:
+                s["pings"] += 1
+                s["readTokens"] += read_tokens or 0
+                s["last_touch"] = time.time()
+
+    def snapshot(self):
+        now = time.time()
+        with self.lock:
+            return {sid: {"account_uuid": s.get("account_uuid"),
+                          "idle": int(now - s.get("last_real", now)),
+                          "sinceTouch": int(now - s.get("last_touch", now)),
+                          "pings": s.get("pings", 0), "readTokens": s.get("readTokens", 0)}
+                    for sid, s in self.sessions.items()}
+
+
+def _account_name_for_uuid(uuid, _cache={}):
+    """Map a request's account_uuid to a saved claude-auth account name (for token refresh)."""
+    if not uuid:
+        return None
+    if uuid not in _cache:
+        _cache[uuid] = next((n for n, p in load_index().get("accounts", {}).items()
+                             if p.get("accountUuid") == uuid), None)
+    return _cache[uuid]
+
+def _account_uuid_from_metadata(body):
+    """Pull account_uuid from a request body's metadata.user_id (itself a JSON string)."""
+    try:
+        uid = (json.loads(body).get("metadata") or {}).get("user_id")
+        if isinstance(uid, str):
+            return (json.loads(uid) or {}).get("account_uuid")
+    except Exception:
+        pass
+    return None
+
+def _fresh_token_for_account(name):
+    """A usable access token for a saved account, refreshing the backup if near expiry."""
+    raw = kc_read(STORE_SERVICE, name)
+    if not raw:
+        return None
+    try:
+        cred = json.loads(raw).get("claudeAiOauth", {})
+    except Exception:
+        return None
+    exp, tok = cred.get("expiresAt") or 0, cred.get("accessToken")
+    if exp and exp / 1000 > time.time() + 60:
+        return tok
+    ok, _ = refresh_stored(name)
+    if ok:
+        raw2 = kc_read(STORE_SERVICE, name)
+        try:
+            return json.loads(raw2).get("claudeAiOauth", {}).get("accessToken")
+        except Exception:
+            pass
+    return tok
+
+_RE_MAXTOK = re.compile(rb'("max_tokens"\s*:\s*)\d+')
+def _set_max_tokens_1(body):
+    """Rewrite the top-level max_tokens to 1 in the RAW bytes — every other byte
+    unchanged, so the cached prefix is untouched and the replay reads the cache
+    (a warm ping) instead of writing a new entry."""
+    return _RE_MAXTOK.subn(rb'\g<1>1', body, count=1)[0]
+
+
+class KeepWarmHandler(BaseHTTPRequestHandler):
+    """Transparent forwarding proxy: keeps Claude Code's own auth (no account swap),
+    forwards verbatim, and captures each session's exact request bytes keyed by
+    X-Claude-Code-Session-Id so keep-warm can replay them later."""
+    protocol_version = "HTTP/1.1"
+    server_version = f"claude-auth-keepwarm/{__version__}"
+
+    def log_message(self, fmt, *a):
+        _kw_log(fmt % a)
+
+    def do_GET(self):
+        if self.path.startswith("/__kw/"):
+            return self._control()
+        self._proxy()
+    def do_POST(self):   self._proxy()
+    def do_PUT(self):    self._proxy()
+    def do_PATCH(self):  self._proxy()
+    def do_DELETE(self): self._proxy()
+
+    def _raw_json(self, code, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            self.wfile.write(b)
+        except Exception:
+            pass
+
+    def _control(self):
+        self._raw_json(200, KWSTORE.snapshot() if KWSTORE else {})
+
+    def _proxy(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n) if n > 0 else b""
+        sid = self.headers.get("X-Claude-Code-Session-Id")
+        try:
+            conn = _upstream_conn()
+            conn.request(self.command, self.path, body=body,
+                         headers=_forward_headers(self.headers, token=None))  # transparent: keep claude's auth
+            resp = conn.getresponse()
+        except Exception as e:
+            return self._raw_json(502, _err_body(f"keep-warm proxy could not reach the API ({e})"))
+        if resp.status < 400 and sid and KWSTORE is not None:
+            KWSTORE.remember(sid, self.command, self.path, body, dict(self.headers),
+                             _account_uuid_from_metadata(body))
+        self.send_response(resp.status)
+        for k, v in resp.getheaders():
+            if k.lower() in _HOP_BY_HOP or k.lower() in ("content-length", "connection"):
+                continue
+            self.send_header(k, v)
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _warm_ping(sid):
+    """Replay a captured session's last request as a cheap cache-read to refresh its TTL.
+
+    Token priority: the bearer captured from Claude Code's own request (fresh, valid
+    for this exact account+cache, and re-captured on every real turn) → then, only if
+    that's rejected, a freshly-refreshed token for the matching saved account. We avoid
+    leaning on the saved backup for the *active* account, whose single-use refresh token
+    Claude Code rotates out from under us."""
+    if KWSTORE is None:
+        return
+    s = KWSTORE.get(sid)
+    if not s or not s.get("body"):
+        return
+    hdrs = s.get("headers") or {}
+    body = _set_max_tokens_1(s["body"])
+    name = _account_name_for_uuid(s.get("account_uuid"))
+    token = ((hdrs.get("Authorization", "") or "").replace("Bearer ", "").strip()
+             or (_fresh_token_for_account(name) if name else None))
+    if not token:
+        _kw_log(f"{sid[:8]}: no token to warm; skipping")
+        return
+
+    def send(tok):
+        c = _upstream_conn()
+        try:
+            c.request(s["command"], s["path"], body=body,
+                      headers=_forward_headers(hdrs, token=tok, meter=True))  # identity → sniffable
+            r = c.getresponse()
+            return r, r.read()
+        finally:
+            try:
+                c.close()
+            except Exception:
+                pass
+
+    try:
+        resp, raw = send(token)
+        if resp.status in (401, 403) and name:      # captured bearer expired → refresh the saved account, retry once
+            fresh = _fresh_token_for_account(name)
+            if fresh and fresh != token:
+                resp, raw = send(fresh)
+    except Exception as e:
+        _kw_log(f"{sid[:8]}: warm ping error: {e}")
+        return
+    if resp.status == 429:
+        _kw_log(f"{sid[:8]}: rate-limited (429); skipping this tick")
+        return
+    if resp.status >= 400:
+        _kw_log(f"{sid[:8]}: warm ping failed (status {resp.status}) — token likely expired past refresh")
+        return
+
+    def sniff(rx):
+        m = rx.search(raw)
+        return int(m.group(1)) if m else 0
+    cr, cw = sniff(_RE_CR_TOK), sniff(_RE_CW_TOK)
+    KWSTORE.note_ping(sid, cr)
+    _kw_log(f"{sid[:8]}: warm ping · status={resp.status} cache_read={cr} cache_create={cw}")
+
+def _keep_warm_loop():
+    """Ping marked, idle, captured sessions to keep their caches warm."""
+    while True:
+        time.sleep(KW_CHECK_SECS)
+        if KWSTORE is None:
+            continue
+        st = _kw_read_state()
+        marked = set(st.get("marked", []))
+        interval = st.get("interval", KW_INTERVAL_DEFAULT)
+        maxidle = st.get("max", KW_MAX_DEFAULT)
+        if not marked:
+            continue
+        snap = KWSTORE.snapshot()
+        for sid in marked:
+            s = snap.get(sid)
+            if not s or s["idle"] > maxidle:
+                continue                          # not captured yet, or past the idle cap
+            if s["sinceTouch"] >= interval:
+                _warm_ping(sid)
+
+
+def _kw_pid():
+    try:
+        with open(KW_PID) as f:
+            pid = int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        try:
+            os.remove(KW_PID)
+        except OSError:
+            pass
+        return None
+    return pid
+
+def _kw_read_state():
+    try:
+        with open(KW_STATE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def _kw_write_state(d):
+    os.makedirs(STORE_DIR, exist_ok=True)
+    tmp = KW_STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=2)
+    os.replace(tmp, KW_STATE)
+
+def _kw_wait_health(port, timeout=6.0):
+    deadline = time.time() + timeout
+    url = f"http://127.0.0.1:{port}/__kw/health"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.15)
+    return False
+
+def _kw_snapshot():
+    st = _kw_read_state()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{st.get('port', DEFAULT_KW_PORT)}/__kw/health",
+                                    timeout=2) as r:
+            return json.loads(r.read()), st
+    except Exception:
+        return {}, st
+
+def _kw_serve(args):
+    global KWSTORE
+    KWSTORE = _SessionStore()
+    port = args.port or DEFAULT_KW_PORT
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), KeepWarmHandler)
+    except OSError as e:
+        die(f"could not bind 127.0.0.1:{port} — {e}")
+    httpd.daemon_threads = True
+    try:
+        with open(KW_PID, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+    def _bye(*_):
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+    signal.signal(signal.SIGTERM, _bye)
+    signal.signal(signal.SIGINT, _bye)
+    threading.Thread(target=_keep_warm_loop, daemon=True).start()
+    _kw_log(f"keep-warm serving 127.0.0.1:{port}")
+    httpd.serve_forever()
+    _kw_log("stopped")
+
+def _kw_start(args):
+    if _kw_pid():
+        die(f"keep-warm already running (pid {_kw_pid()}) — " + clay("claude-auth keep-warm stop") + " first")
+    if _pool_pid():
+        die("a pool is running — it owns ANTHROPIC_BASE_URL. Run " + clay("claude-auth pool stop") + " first.")
+    port = args.port or DEFAULT_KW_PORT
+    interval = min(args.interval or 50, 55) * 60
+    maxidle = (getattr(args, "max", None) or 8) * 3600
+    info()
+    step(f"Starting keep-warm on {clay(f'127.0.0.1:{port}')} {dim('· transparent capture proxy')}")
+    logf = open(KW_LOG, "a")
+    subprocess.Popen([_self_bin(), "keep-warm", "serve", "--port", str(port)],
+                     stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
+    if not _kw_wait_health(port):
+        die("keep-warm did not come up — check " + KW_LOG)
+    st = _kw_read_state()
+    st.update(port=port, startedAt=int(time.time()), interval=interval, max=maxidle)
+    st.setdefault("marked", [])
+    _kw_write_state(st)
+    if not getattr(args, "no_wire", False):
+        _wire_base_url(port)
+        ok("Keep-warm is live " + dim("· captures sessions started from now on"))
+        hint("wired " + ink("ANTHROPIC_BASE_URL") + " into ~/.claude/settings.json — restart Claude Code")
+    else:
+        ok(f"Keep-warm live on {clay(f'http://127.0.0.1:{port}')}")
+        hint("point Claude Code at it:  " + clay(f"export ANTHROPIC_BASE_URL=http://127.0.0.1:{port}"))
+    hint("then " + clay("claude-auth sessions") + dim(" to find one, ") +
+         clay("keep-warm add <id>") + dim(" to warm it"))
+    info()
+
+def _kw_stop(args):
+    pid = _kw_pid()
+    _unwire_base_url()
+    info()
+    if not pid:
+        hint("keep-warm not running " + dim("(settings.json restored)"))
+        info()
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    for _ in range(20):
+        if not _kw_pid():
+            break
+        time.sleep(0.1)
+    try:
+        os.remove(KW_PID)
+    except OSError:
+        pass
+    ok("Keep-warm stopped " + dim("· settings.json restored"))
+    info()
+
+def _kw_add(args, on):
+    sessions = _list_sessions(limit=500)
+    sid, cands = (None, [])
+    if getattr(args, "last", False):
+        sid = sessions[0]["id"] if sessions else None
+    elif args.target:
+        sid, cands = _resolve_session(args.target, sessions)
+    info()
+    if not sid:
+        if cands:
+            warn(f"'{args.target}' is ambiguous — matches {len(cands)} sessions:")
+            for s in cands[:8]:
+                info(IND * 2 + clay(s["id"][:8]) + dim(f"  {s['project']} · {s['branch']}"))
+            hint("use the 8-char id instead")
+        else:
+            die(f"no session matches '{args.target or '--last'}' — see " + clay("claude-auth sessions"))
+        info()
+        return
+    st = _kw_read_state()
+    marked = set(st.get("marked", []))
+    marked.add(sid) if on else marked.discard(sid)
+    st["marked"] = sorted(marked)
+    _kw_write_state(st)
+    short = sid[:8]
+    if on:
+        ok(f"warming session {clay(short)}")
+        if not _kw_pid():
+            hint("keep-warm isn't running yet — " + clay("claude-auth keep-warm start"))
+        elif sid not in _keepwarm_captured_ids():
+            hint("not captured yet — it'll warm once a request from it flows through the proxy")
+    else:
+        ok(f"stopped warming {clay(short)}")
+    info()
+
+def cmd_kw_status(args):
+    running = _kw_pid()
+    info()
+    if not running:
+        hint("keep-warm not running — start it with " + clay("claude-auth keep-warm start"))
+        info()
+        return
+    snap, st = _kw_snapshot()
+    marked = set(st.get("marked", []))
+    info(IND + green("●") + " running   " + dim(
+        f"pid {running} · 127.0.0.1:{st.get('port', DEFAULT_KW_PORT)} · "
+        f"interval {st.get('interval', KW_INTERVAL_DEFAULT)//60}m · cap {st.get('max', KW_MAX_DEFAULT)//3600}h"))
+    smeta = {s["id"]: s for s in _list_sessions(limit=500)}
+    ids = set(snap) | marked
+    if not ids:
+        info()
+        hint("no sessions captured or marked yet — " + clay("keep-warm add <id>"))
+        info()
+        return
+    info()
+    for sid in sorted(ids, key=lambda i: (i not in marked, snap.get(i, {}).get("sinceTouch", 1e9))):
+        cap = snap.get(sid)
+        m = smeta.get(sid, {})
+        mark = clay("▶") if sid in marked else " "
+        state = green("captured") if cap else dim("waiting for traffic")
+        pings = (cap or {}).get("pings", 0)
+        extra = dim(f"  · {pings} pings · {(cap or {}).get('readTokens', 0):,} read tok") if pings else ""
+        info(IND + mark + " " + clay(sid[:8]) + dim(f"  {m.get('project', '—')}  ") + state + extra)
+    info()
+    info(IND + clay("▶") + dim(" warming") + "    " + green("●") + dim(" running"))
+    info()
+
+def cmd_keep_warm(args):
+    action = args.action or "status"
+    if action == "serve":
+        _kw_serve(args)
+    elif action == "start":
+        _kw_start(args)
+    elif action == "stop":
+        _kw_stop(args)
+    elif action == "add":
+        _kw_add(args, on=True)
+    elif action == "rm":
+        _kw_add(args, on=False)
+    else:                       # status | list
+        cmd_kw_status(args)
+
+
 def build_parser():
     p = BrandParser(prog="claude-auth", add_help=True,
                     description="Switch between multiple Claude Code accounts (macOS).")
@@ -3381,6 +4069,24 @@ def build_parser():
     for alias in ("current", "whoami"):
         c = sub.add_parser(alias, help="show the active account")
         c.set_defaults(func=cmd_current)
+
+    ss = sub.add_parser("sessions", help="list your Claude Code sessions (find a session id)")
+    ss.add_argument("--limit", type=int, help="max sessions to show (default 25)")
+    ss.set_defaults(func=cmd_sessions)
+
+    kw = sub.add_parser("keep-warm", help="keep a specific session's prompt cache alive while idle")
+    kw.add_argument("action", nargs="?", default="status",
+                    choices=["start", "stop", "status", "list", "add", "rm", "serve"])
+    kw.add_argument("target", nargs="?", help="session id / id-prefix / project (for add|rm)")
+    kw.add_argument("--last", action="store_true", help="target the most-recent session (add|rm)")
+    kw.add_argument("--interval", type=int, metavar="MIN",
+                    help="minutes between warm pings when idle (default 50, max 55)")
+    kw.add_argument("--max", type=int, metavar="HRS",
+                    help="stop warming a session after this many idle hours (default 8)")
+    kw.add_argument("--no-wire", action="store_true",
+                    help="don't edit settings.json; just print the URL to set yourself")
+    kw.add_argument("--port", type=int, help=argparse.SUPPRESS)
+    kw.set_defaults(func=cmd_keep_warm)
 
     u = sub.add_parser("usage", help="show rate-limit usage for your accounts")
     u.add_argument("name", nargs="?", help="account to detail (default: all)")
