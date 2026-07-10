@@ -93,32 +93,36 @@ functions.http('poolJoin', async (req, res) => {
     if (!joinToken || !email || !refreshToken) return bad(res, 400, 'joinToken, email, refreshToken required');
 
     const linkRef = db.collection('joinLinks').doc(joinToken);
-    const member = await db.runTransaction(async (tx) => {
-      const link = await tx.get(linkRef);
-      if (!link.exists) throw Object.assign(new Error('invalid link'), { code: 404 });
-      const l = link.data();
-      if (l.usedAt) throw Object.assign(new Error('link already used'), { code: 409 });
-      if (l.expiresAt && l.expiresAt.toMillis() < Date.now()) throw Object.assign(new Error('link expired'), { code: 410 });
-      if (String(l.targetEmail).toLowerCase() !== String(email).toLowerCase())
-        throw Object.assign(new Error('this link is for a different account'), { code: 403 });
 
-      const memberId = accountUuid || email.split('@')[0];
+    // 1) validate the link WITHOUT mutating anything yet
+    const linkSnap = await linkRef.get();
+    if (!linkSnap.exists) return bad(res, 404, 'invalid link');
+    const l = linkSnap.data();
+    if (l.usedAt) return bad(res, 409, 'link already used');
+    if (l.expiresAt && l.expiresAt.toMillis() < Date.now()) return bad(res, 410, 'link expired');
+    if (String(l.targetEmail).toLowerCase() !== String(email).toLowerCase())
+      return bad(res, 403, 'this link is for a different account');
+    const memberId = accountUuid || email.split('@')[0];
+
+    // 2) store the refresh token FIRST — if this fails, the link is untouched and reusable
+    await writeRefreshToken(l.poolId, memberId, refreshToken);
+
+    // 3) transactionally burn the link + create the member (re-check unused for single-use safety)
+    await db.runTransaction(async (tx) => {
+      const fresh = await tx.get(linkRef);
+      if (fresh.data().usedAt) throw Object.assign(new Error('link already used'), { code: 409 });
       const mRef = db.collection('pools').doc(l.poolId).collection('members').doc(memberId);
       tx.set(mRef, {
         email, accountUuid: accountUuid || null, role: l.role || 'member',
         status: 'active', secretRef: secretName(l.poolId, memberId),
-        joinedAt: FieldValue.serverTimestamp(),
-        accessToken: null, accessExpiresAt: null,
+        joinedAt: FieldValue.serverTimestamp(), accessToken: null, accessExpiresAt: null,
       }, { merge: true });
       tx.update(linkRef, { usedAt: FieldValue.serverTimestamp(), memberId });
-      return { poolId: l.poolId, memberId };
     });
 
-    await writeRefreshToken(member.poolId, member.memberId, refreshToken);
-    const memberToken = jwt.sign({ poolId: member.poolId, memberId: member.memberId },
+    const memberToken = jwt.sign({ poolId: l.poolId, memberId },
       await getJwtSecret(), { algorithm: 'HS256', expiresIn: '365d' });
-
-    res.json({ poolId: member.poolId, memberId: member.memberId, memberToken });
+    res.json({ poolId: l.poolId, memberId, memberToken });
   } catch (e) { bad(res, e.code && e.code < 600 ? e.code : 500, e.message); }
 });
 

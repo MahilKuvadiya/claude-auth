@@ -3069,10 +3069,15 @@ def cmd_pool_join(args):
     info()
     if not link:
         die("usage: " + clay('claudex pool join "<pool-link>"'))
-    entry, n = _do_join(link, args=args, use_current=getattr(args, "use_current", False))
+    uc = getattr(args, "use_current", False)
+    entry, n = _do_join(link, args=args, use_current=uc)
     ok(f"Joined the pool as {bold(clay(entry['name']))} {dim('· ' + (entry['email'] or ''))}")
-    hint(f"{n} member(s) · a dedicated session was donated " +
-         dim("(your own Claude Code login is untouched)"))
+    if uc:
+        hint(f"{n} member(s) · donated your " + bold("current live") + " account " +
+             dim("(--use-current; the pool will refresh it, so don't use this account in Claude Code elsewhere)"))
+    else:
+        hint(f"{n} member(s) · a dedicated session was donated " +
+             dim("(your own Claude Code login is untouched)"))
     hint("start it with " + clay("claudex pool start") +
          dim(", then pick who serves you with ") + clay("claudex pool use <name>"))
     hint("leave with " + clay("claudex pool leave"))
