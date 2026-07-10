@@ -38,6 +38,9 @@ jobs:
           formula-name: claudex
           formula-path: Formula/claudex.rb
           homebrew-tap: vishalmakwana111/homebrew-claudex
+          # We run on a branch push (not a tag), so GITHUB_REF isn't a tag —
+          # pass the tag explicitly or the action errors "invalid ref: refs/heads/main".
+          tag-name: ${{ steps.release.outputs.tag_name }}
           download-url: https://github.com/vishalmakwana111/claudex/archive/refs/tags/${{ steps.release.outputs.tag_name }}.tar.gz
         env:
           COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
