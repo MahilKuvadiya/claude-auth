@@ -81,6 +81,15 @@ PASSTHROUGH = False    # set by `pool stop`: forward each request with its OWN t
 LAST_REQ_TS = 0.0      # epoch of the last proxied request (for passthrough idle-exit)
 PASSTHROUGH_IDLE_SECS = 900   # a stopped-but-passthrough daemon self-exits after this idle
 
+# ── claudex pool backend (GCP Cloud Functions) — server-side token custody ──
+# When a pool config has {"backend": true}, tokens are custodied server-side and
+# minted on demand instead of living in a Pantry blob. URLs are env-overridable.
+CLAUDEX_BACKEND = {
+    "join":      os.environ.get("CLAUDEX_JOIN_URL",      "https://asia-south1-yash-test-495112.cloudfunctions.net/claudex-poolJoin"),
+    "token":     os.environ.get("CLAUDEX_TOKEN_URL",     "https://asia-south1-yash-test-495112.cloudfunctions.net/claudex-poolToken"),
+    "telemetry": os.environ.get("CLAUDEX_TELEMETRY_URL", "https://asia-south1-yash-test-495112.cloudfunctions.net/claudex-telemetry"),
+}
+
 REPO = "github.com/vishalmakwana111/claudex"
 # Raw URL of the canonical script on the default branch — used by `update`.
 RAW_SCRIPT_URL = "https://raw.githubusercontent.com/vishalmakwana111/claudex/main/bin/claudex"
@@ -1866,7 +1875,49 @@ def _clear_remote_config():
     except OSError:
         pass
 
+class BackendStore:
+    """Backend-mode store: tokens are custodied server-side (Cloud Functions).
+    `load()` shapes exactly like the Pantry blob (one member = the serving seat)
+    so the rest of `_Pool` works unchanged; token minting and usage telemetry go
+    to the backend instead of a shared blob."""
+    is_backend = True
+
+    def __init__(self, cfg):
+        self.pool_id = cfg["poolId"]
+        self.member_id = cfg["memberId"]
+        self.member_token = cfg["memberToken"]
+        self.name = cfg.get("name") or "me"
+
+    def fetch_token(self, serve_member=None):
+        url = CLAUDEX_BACKEND["token"] + f"?pool={self.pool_id}"
+        if serve_member:
+            url += f"&serve={serve_member}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.member_token}"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read().decode())
+
+    def load(self):
+        d = self.fetch_token()
+        mid = d.get("servingMemberId") or self.member_id
+        return {"version": 1, "usage": {}, "served": {}, "members": {mid: {
+            "name": self.name, "accessToken": d.get("accessToken"),
+            "refreshToken": "__backend__", "expiresAt": d.get("expiresAt")}}}
+
+    def save(self, pool):
+        return   # backend owns token state; usage is sent via post_telemetry()
+
+    def post_telemetry(self, events):
+        body = json.dumps({"events": events}).encode()
+        req = urllib.request.Request(CLAUDEX_BACKEND["telemetry"], data=body, method="POST",
+            headers={"content-type": "application/json",
+                     "Authorization": f"Bearer {self.member_token}"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            r.read()
+
+
 def _store_from_config(cfg):
+    if cfg.get("backend"):
+        return BackendStore(cfg)
     return PoolStore(cfg["pantryId"], _b64u_dec(cfg["key"]), cfg.get("basket", POOL_BASKET))
 
 # The proxy reads the selected account fresh so `pool use` reaches running
@@ -1900,7 +1951,8 @@ class _Pool:
         self.stats = {}        # name -> {"served", "failover", "last"}
         self.rr = -1           # round-robin cursor (balance mode)
         self.accounts = []     # [{name, member_id, token, refresh, expiresAt}], active first
-        self.store = store              # PoolStore for shared mode, else None
+        self.store = store              # PoolStore / BackendStore for shared mode, else None
+        self.backend = getattr(store, "is_backend", False)  # backend = server-side token custody
         self.consumer_id = consumer_id  # our member id (who is spending), shared mode
         self.usage_delta = {}           # member_id -> tally we've consumed since last flush
         self.served_delta = {}          # member_id -> tally their token served since last flush
@@ -1997,10 +2049,34 @@ class _Pool:
                 for k in _TOK_KEYS:
                     d[k] += counts.get(k, 0) or 0
 
+    def _flush_backend(self):
+        """Backend mode: POST served deltas to the telemetry function."""
+        with self.lock:
+            sd = dict(self.served_delta)
+            self.served_delta, self.usage_delta = {}, {}
+        if not sd:
+            return
+        events = [{"servingMemberId": mid, "requests": d.get("requests", 0),
+                   "inputTokens": d.get("inputTokens", 0), "outputTokens": d.get("outputTokens", 0),
+                   "cacheReadTokens": d.get("cacheReadTokens", 0), "cacheWriteTokens": d.get("cacheWriteTokens", 0)}
+                  for mid, d in sd.items()]
+        try:
+            self.store.post_telemetry(events)
+        except Exception as e:
+            _pool_log(f"telemetry post failed: {e}")
+            with self.lock:                      # requeue so nothing is lost
+                for mid, d in sd.items():
+                    t = self.served_delta.setdefault(mid, _empty_tally())
+                    t["requests"] += d.get("requests", 0)
+                    for k in _TOK_KEYS:
+                        t[k] += d.get(k, 0)
+
     def flush_usage(self):
         """Merge accumulated usage deltas into the shared blob (best-effort, additive)."""
         if not self.store:
             return
+        if self.backend:
+            return self._flush_backend()
         with self.lock:
             sd, ud = self.served_delta, self.usage_delta
             self.served_delta, self.usage_delta = {}, {}
@@ -2107,11 +2183,42 @@ class _Pool:
                 lk = self.refresh_locks[name] = threading.Lock()
             return lk
 
+    def _backend_token(self, name):
+        """Backend mode: the pool backend is the sole refresher, so we just fetch a
+        short-lived access token from it, cached until ~60s before it expires."""
+        with self.lock:
+            a = self._by_name(name)
+            exp = (a.get("expiresAt") or 0) if a else 0
+            tok = a.get("token") if a else None
+        if tok and exp / 1000 > time.time() + 60:
+            return tok
+        with self._refresh_lock(name):
+            with self.lock:
+                a = self._by_name(name)
+                exp = (a.get("expiresAt") or 0) if a else 0
+                tok = a.get("token") if a else None
+                mid = a.get("member_id") if a else None
+            if tok and exp / 1000 > time.time() + 60:
+                return tok
+            try:
+                d = self.store.fetch_token(mid)
+            except Exception as e:
+                _pool_log(f"backend token fetch failed: {e}")
+                return tok
+            with self.lock:
+                a = self._by_name(name)
+                if a:
+                    a["token"] = d.get("accessToken")
+                    a["expiresAt"] = d.get("expiresAt")
+            return d.get("accessToken")
+
     def token_for(self, name):
         """A usable access token for `name`, refreshing it first if it's expiring.
 
         Refreshes are serialized per account (refresh tokens are single-use, so
         letting parallel requests refresh the same one would invalidate it)."""
+        if self.backend:
+            return self._backend_token(name)
         def _current():
             with self.lock:
                 a = self._by_name(name)
@@ -2857,12 +2964,46 @@ def _capture_dedicated_session(args):
         warn("no prior login to restore — the donated session is now your live login too")
     return new_cred, new_oauth, new_uid
 
+def _do_join_backend(token, args=None, use_current=False):
+    """Backend join: donate a dedicated session's refresh chain to the pool backend
+    (which becomes its sole refresher). Builds on _capture_dedicated_session (d745659)
+    so the owner's own Claude Code login is never touched."""
+    if use_current:
+        cred, oauth, uid = _my_live_credential()
+    else:
+        cred, oauth, uid = _capture_dedicated_session(args)
+    mid = oauth.get("accountUuid") or uid
+    email = oauth.get("emailAddress") or ""
+    if not cred.get("refreshToken"):
+        die("the donated session has no refresh token")
+    body = json.dumps({"joinToken": token, "email": email,
+                       "accountUuid": mid, "refreshToken": cred.get("refreshToken")}).encode()
+    req = urllib.request.Request(CLAUDEX_BACKEND["join"], data=body, method="POST",
+                                 headers={"content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            resp = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        die(f"join was rejected: {e.read().decode()[:200]}")
+    except Exception as e:
+        die(f"couldn't reach the pool backend: {e}")
+    name = email.split("@")[0] if email else "me"
+    _save_remote_config({
+        "backend": True, "poolId": resp["poolId"], "memberId": resp["memberId"],
+        "memberToken": resp["memberToken"], "name": name,
+        "selectedMemberId": resp["memberId"],
+    })
+    return {"name": name, "email": email}, 1
+
+
 def _do_join(link, args=None, use_current=False):
     """Contribute an account to the pool `link` and save the link locally.
 
     By default this signs in a dedicated session (independent refresh chain) so the
     pool never fights the owner's own Claude Code. `use_current` donates the live
     token as-is — only safe for an account not used by Claude Code elsewhere."""
+    if not link.startswith(POOL_LINK_PREFIX):      # a dashboard-issued backend join token
+        return _do_join_backend(link, args=args, use_current=use_current)
     pantry_id, key = _pool_link_decode(link)
     store = PoolStore(pantry_id, key)
     if use_current:
@@ -2944,6 +3085,11 @@ def cmd_pool_leave(args):
         die("you haven't joined a shared pool")
     if _pool_pid() and _pool_read_state().get("remote"):
         die("the pool proxy is running — run " + clay("claudex pool stop") + " first")
+    if cfg.get("backend"):
+        _clear_remote_config()
+        ok("Left the pool locally — ask an org admin to revoke your seat in the console")
+        info()
+        return
     store = _store_from_config(cfg)
     try:
         pool = store.load()
