@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Install claude-auth into ~/.local/bin
+# Install claudex into ~/.local/bin
 set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC="$SRC_DIR/bin/claude-auth"
+SRC="$SRC_DIR/bin/claudex"
 DEST_DIR="$HOME/.local/bin"
-DEST="$DEST_DIR/claude-auth"
+DEST="$DEST_DIR/claudex"
 
 if [[ "$(uname)" != "Darwin" ]]; then
-  echo "error: claude-auth supports macOS only (it uses the login Keychain)." >&2
+  echo "error: claudex supports macOS only (it uses the login Keychain)." >&2
   exit 1
 fi
 
@@ -20,7 +20,15 @@ fi
 mkdir -p "$DEST_DIR"
 cp "$SRC" "$DEST"
 chmod +x "$DEST"
-echo "✓ installed claude-auth → $DEST"
+echo "✓ installed claudex → $DEST"
+
+# Transition shim: keep the legacy `claude-auth` name working so any autoswitch/pool
+# hooks written before the rename still resolve. Deprecated — remove once re-enabled.
+LEGACY="$DEST_DIR/claude-auth"
+if [[ ! -e "$LEGACY" || -L "$LEGACY" ]]; then
+  ln -sf claudex "$LEGACY"
+  echo "✓ legacy alias claude-auth → claudex (deprecated; for existing hooks)"
+fi
 
 # Warn if ~/.local/bin isn't on PATH
 case ":$PATH:" in
@@ -36,4 +44,4 @@ case ":$PATH:" in
 esac
 
 echo
-echo "Done. Try:  claude-auth --help"
+echo "Done. Try:  claudex --help"

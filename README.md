@@ -1,21 +1,26 @@
-# claude-auth
+# claudex
 
 > Switch between multiple Claude Code accounts on one Mac — like `gh auth switch`, but for Claude Code.
 
-If you juggle more than one Claude Code login (personal, work, a client's org…), you know the pain: there's no built-in account switcher, so you end up logging out and back in every time. `claude-auth` fixes that. Save each account once, then flip between them instantly — and pool, warm, and track usage across all of them.
+[![CI](https://github.com/vishalmakwana111/claudex/actions/workflows/ci.yml/badge.svg)](https://github.com/vishalmakwana111/claudex/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/vishalmakwana111/claudex?sort=semver)](https://github.com/vishalmakwana111/claudex/releases)
+[![Homebrew](https://img.shields.io/badge/homebrew-claudex-blue)](https://github.com/vishalmakwana111/homebrew-claudex)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+If you juggle more than one Claude Code login (personal, work, a client's org…), you know the pain: there's no built-in account switcher, so you end up logging out and back in every time. `claudex` fixes that. Save each account once, then flip between them instantly — and pool, warm, and track usage across all of them.
 
 ```console
- ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗
-██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝
-██║     ██║     ███████║██║   ██║██║  ██║█████╗
-██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝
-╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗
- ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝
-auth  ·  multi-account switcher for Claude Code
+ ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗██╗  ██╗
+██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝╚██╗██╔╝
+██║     ██║     ███████║██║   ██║██║  ██║█████╗   ╚███╔╝ 
+██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝   ██╔██╗ 
+╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗██╔╝ ██╗
+ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝
+multi-account switcher · rate-limit tooling for Claude Code
 ```
 
 ```console
-$ claude-auth list
+$ claudex list
 
   Accounts   ·   2 saved
 
@@ -26,7 +31,7 @@ $ claude-auth list
   │ ○ │ work     │ you@company.com   │ Acme      │ team │ 3d ago  │
   └───┴──────────┴───────────────────┴───────────┴──────┴─────────┘
 
-$ claude-auth switch work
+$ claudex switch work
 
   ✓ Switched to work  · you@company.com
   ↻ restart Claude Code (and running sessions) to use this account
@@ -45,7 +50,7 @@ A Claude Code login isn't a single token in a single place. It's split across **
 | **Secrets** | macOS Keychain, service `Claude Code-credentials` | OAuth `accessToken`, `refreshToken`, `expiresAt`, plus MCP server tokens |
 | **Identity** | `~/.claude.json` → `oauthAccount` + `userID` | email, organization, account UUID |
 
-Swapping just the token leaves the app convinced it's still the old account (wrong email/org, possible mismatches). A *correct* switch has to swap **both, atomically** — exactly what `claude-auth` does, and why hand-pasting tokens is fragile.
+Swapping just the token leaves the app convinced it's still the old account (wrong email/org, possible mismatches). A *correct* switch has to swap **both, atomically** — exactly what `claudex` does, and why hand-pasting tokens is fragile.
 
 ## Features
 
@@ -65,20 +70,28 @@ Swapping just the token leaves the app convinced it's still the old account (wro
 
 ## Install
 
+**Homebrew** (recommended):
+
 ```bash
-git clone https://github.com/vishalmakwana111/claude-auth.git
-cd claude-auth
+brew install vishalmakwana111/claudex/claudex
+```
+
+**From source:**
+
+```bash
+git clone https://github.com/vishalmakwana111/claudex.git
+cd claudex
 ./install.sh
 ```
 
-The installer copies the script to `~/.local/bin/claude-auth` and checks that directory is on your `PATH`.
+The installer copies the script to `~/.local/bin/claudex` and checks that directory is on your `PATH`.
 
 <details>
 <summary>Manual install</summary>
 
 ```bash
-cp bin/claude-auth ~/.local/bin/claude-auth
-chmod +x ~/.local/bin/claude-auth
+cp bin/claudex ~/.local/bin/claudex
+chmod +x ~/.local/bin/claudex
 # ensure ~/.local/bin is on PATH:
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
@@ -87,26 +100,26 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 Once installed, update in place — no re-clone:
 
 ```bash
-claude-auth update          # download the latest and replace itself
-claude-auth update --check  # just tell me if a newer version exists
+claudex update          # download the latest and replace itself
+claudex update --check  # just tell me if a newer version exists
 ```
 
-`update` fetches the latest `bin/claude-auth` from GitHub, verifies it parses as valid Python, then atomically swaps it over the running file. Your saved accounts are untouched. See [COMMANDS.md → update](COMMANDS.md#update).
+`update` fetches the latest `bin/claudex` from GitHub, verifies it parses as valid Python, then atomically swaps it over the running file. Your saved accounts are untouched. See [COMMANDS.md → update](COMMANDS.md#update).
 
 ## Quick start
 
 ```bash
 # 1. Save the account you're currently logged into
-claude-auth add personal
+claudex add personal
 
 # 2. Sign into another account and save it in one step
-claude-auth login work        # opens the browser; saved as "work" when done
+claudex login work        # opens the browser; saved as "work" when done
 
 # 3. See what you've got
-claude-auth list
+claudex list
 
 # 4. Switch any time (no browser needed)
-claude-auth switch personal
+claudex switch personal
 ```
 
 > **Restart Claude Code after switching.** A running session holds the old token in memory; the swap only affects new sessions. (Want no-restart switching? See [`pool`](COMMANDS.md#pool-local).)
@@ -135,7 +148,7 @@ Full reference — every flag, example, and gotcha — in **[COMMANDS.md](COMMAN
 | **Setup** | [`statusline`](COMMANDS.md#statusline) | Compact status line for Claude Code |
 | | [`completion`](COMMANDS.md#completion) `[bash\|zsh]` | Shell-completion script |
 | | [`doctor`](COMMANDS.md#doctor) | Health-check your setup |
-| | [`update`](COMMANDS.md#update) | Update claude-auth to the latest version |
+| | [`update`](COMMANDS.md#update) | Update claudex to the latest version |
 | | [`commands`](COMMANDS.md#commands) | Show the cheat sheet in your terminal |
 
 ## Highlights
@@ -153,7 +166,7 @@ Full reference — every flag, example, and gotcha — in **[COMMANDS.md](COMMAN
 ## How it works
 
 ```
-                         claude-auth switch work
+                         claudex switch work
                                    │
             ┌──────────────────────┼──────────────────────┐
             ▼                      ▼                       ▼
@@ -179,7 +192,7 @@ A full deep-dive — storage layout, the in-place-update trick, atomic writes, a
 | `~/.claude-accounts/accounts.json` (chmod 600) | Non-secret index: names, emails, orgs, expiry | no |
 | `~/.claude.json` → `oauthAccount`, `userID` | Live account identity (managed by Claude Code; swapped on switch) | no |
 
-**The `claude-auth` script itself contains zero secrets** — safe to commit, share, and publish. All tokens stay in *your* Keychain on *your* machine.
+**The `claudex` script itself contains zero secrets** — safe to commit, share, and publish. All tokens stay in *your* Keychain on *your* machine.
 
 ## Security notes
 
@@ -191,15 +204,15 @@ A full deep-dive — storage layout, the in-place-update trick, atomic writes, a
 
 ## Troubleshooting
 
-**`claude-auth: command not found`** — `~/.local/bin` isn't on your `PATH`. See the manual-install steps above.
+**`claudex: command not found`** — `~/.local/bin` isn't on your `PATH`. See the manual-install steps above.
 
 **Switch had no effect** — restart Claude Code; running sessions cache the token in memory.
 
-**`stored credential for X is missing from Keychain`** — the backup Keychain item was deleted. Re-create it: switch to that account via `claude auth login`, then `claude-auth add X`.
+**`stored credential for X is missing from Keychain`** — the backup Keychain item was deleted. Re-create it: switch to that account via `claude auth login`, then `claudex add X`.
 
 **macOS prompts for Keychain access** — click *Always Allow*. Should be rare, since the tool updates items in place rather than recreating them.
 
-Run [`claude-auth doctor`](COMMANDS.md#doctor) to check the whole setup at once.
+Run [`claudex doctor`](COMMANDS.md#doctor) to check the whole setup at once.
 
 ## Limitations
 
@@ -208,7 +221,7 @@ Run [`claude-auth doctor`](COMMANDS.md#doctor) to check the whole setup at once.
 
 ## 🐈 One more thing
 
-Run `claude-auth` (or `claude-auth --help`) in a real terminal and a little cat walks the full width of your CLI — in the clay gradient — and stops at the right edge with a trailing `meow~ ♪`, just above the wordmark. Purely cosmetic: skipped when output is piped, and disabled with `CLAUDE_AUTH_NO_ANIM=1`.
+Run `claudex` (or `claudex --help`) in a real terminal and a little cat walks the full width of your CLI — in the clay gradient — and stops at the right edge with a trailing `meow~ ♪`, just above the wordmark. Purely cosmetic: skipped when output is piped, and disabled with `CLAUDE_AUTH_NO_ANIM=1`.
 
 ```
                                               meow~ ♪ /\_/\

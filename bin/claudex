@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude-auth — switch between multiple Claude Code accounts on one machine.
+claudex — switch between multiple Claude Code accounts on one machine.
 
 Like `gh auth switch`, but for Claude Code. Snapshots the currently logged-in
 account (Keychain credential blob + ~/.claude.json identity) into a named
@@ -32,7 +32,7 @@ import concurrent.futures
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 
-__version__ = "1.11.0"
+__version__ = "1.11.0"  # x-release-please-version
 
 API_USAGE = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
@@ -78,9 +78,9 @@ _HOP_BY_HOP = {
 }
 POOL = None  # the live _Pool instance, set inside the `pool serve` daemon
 
-REPO = "github.com/vishalmakwana111/claude-auth"
+REPO = "github.com/vishalmakwana111/claudex"
 # Raw URL of the canonical script on the default branch — used by `update`.
-RAW_SCRIPT_URL = "https://raw.githubusercontent.com/vishalmakwana111/claude-auth/main/bin/claude-auth"
+RAW_SCRIPT_URL = "https://raw.githubusercontent.com/vishalmakwana111/claudex/main/bin/claudex"
 
 # ───────────────────────────── theme ──────────────────────────────────────
 
@@ -163,7 +163,7 @@ def fetch_usage(access_token, timeout=8):
         "Authorization": f"Bearer {access_token}",
         "anthropic-beta": OAUTH_BETA,
         "anthropic-version": ANTHROPIC_VERSION,
-        "User-Agent": f"claude-auth/{__version__}",
+        "User-Agent": f"claudex/{__version__}",
     })
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -245,7 +245,7 @@ def refresh_access_token(refresh_token, timeout=10):
     }).encode()
     req = urllib.request.Request(OAUTH_TOKEN_URL, data=body, method="POST", headers={
         "Content-Type": "application/json",
-        "User-Agent": f"claude-auth/{__version__}",
+        "User-Agent": f"claudex/{__version__}",
     })
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -277,7 +277,7 @@ def refresh_stored(name, idx=None):
     if data.get("expires_in"):
         cred["expiresAt"] = int((time.time() + data["expires_in"]) * 1000)
     blob["claudeAiOauth"] = cred
-    kc_write(STORE_SERVICE, name, json.dumps(blob), label=f"claude-auth: {name}")
+    kc_write(STORE_SERVICE, name, json.dumps(blob), label=f"claudex: {name}")
     if idx is not None and name in idx["accounts"]:
         idx["accounts"][name]["expiresAt"] = cred.get("expiresAt")
     return True, None
@@ -346,12 +346,12 @@ def die(msg, code=1):
 # ──────────────────────────── banner / help ───────────────────────────────
 
 _WORDMARK = [
-    " ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗",
-    "██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝",
-    "██║     ██║     ███████║██║   ██║██║  ██║█████╗  ",
-    "██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝  ",
-    "╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗",
-    " ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝",
+    " ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗██╗  ██╗",
+    "██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝╚██╗██╔╝",
+    "██║     ██║     ███████║██║   ██║██║  ██║█████╗   ╚███╔╝ ",
+    "██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝   ██╔██╗ ",
+    "╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗██╔╝ ██╗",
+    " ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝",
 ]
 
 def render_banner():
@@ -360,10 +360,9 @@ def render_banner():
         width = max(len(l) for l in _WORDMARK)
         for line in _WORDMARK:
             out.append(IND + gradient(line.ljust(width), CLAY_LITE, CLAY_DARK))
-        out.append(IND + bold(clay("auth")) +
-                   dim("  ·  multi-account switcher for Claude Code"))
+        out.append(IND + dim("multi-account switcher · rate-limit tooling for Claude Code"))
     else:
-        out.append(IND + clay("◆ ") + bold(ink("claude-auth")))
+        out.append(IND + clay("◆ ") + bold(ink("claudex")))
         out.append(IND + dim("multi-account switcher for Claude Code"))
     return "\n".join(out)
 
@@ -436,7 +435,7 @@ def render_help():
         ("rename",  "<old> <new>",  "Rename a saved profile"),
         ("remove",  "<name>",       "Delete a saved profile" + dim("  (alias: rm)")),
         ("doctor",  "",             "Health-check your setup"),
-        ("update",  "",             "Update claude-auth to the latest version"),
+        ("update",  "",             "Update claudex to the latest version"),
         ("completion", "[bash|zsh]", "Output shell completion"),
         ("commands", "",            "Show all commands (cheat sheet)"),
     ]
@@ -444,7 +443,7 @@ def render_help():
     aw = max(len(a) for _, a, _ in rows)
     L = ["", render_banner(), ""]
     L.append(IND + bold(clay("USAGE")))
-    L.append(IND * 2 + ink("claude-auth") + " " + dim("<command> [options]"))
+    L.append(IND * 2 + ink("claudex") + " " + dim("<command> [options]"))
     L.append("")
     L.append(IND + bold(clay("COMMANDS")))
     for c, a, d in rows:
@@ -452,7 +451,7 @@ def render_help():
                  dim(vpad(a, aw)) + "  " + d)
     L.append("")
     L.append(IND + bold(clay("EXAMPLES")))
-    for ex in ("claude-auth login work", "claude-auth switch personal", "claude-auth list"):
+    for ex in ("claudex login work", "claudex switch personal", "claudex list"):
         L.append(IND * 2 + dim("$ ") + clay(ex))
     L.append("")
     L.append(IND + dim("docs   ") + cyan(REPO) + dim(f"   ·   v{__version__}"))
@@ -530,7 +529,7 @@ def read_claude_json():
 
 def write_claude_json(data):
     # atomic write to avoid corrupting the (large) config on crash
-    tmp = CLAUDE_JSON + ".claude-auth.tmp"
+    tmp = CLAUDE_JSON + ".claudex.tmp"
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, CLAUDE_JSON)
@@ -586,7 +585,7 @@ def snapshot_into(name, idx, *, quiet=False):
         die("no live Claude Code credential found in Keychain — log in first")
     oauth, user_id = current_identity()
 
-    kc_write(STORE_SERVICE, name, json.dumps(blob), label=f"claude-auth: {name}")
+    kc_write(STORE_SERVICE, name, json.dumps(blob), label=f"claudex: {name}")
     cred = blob.get("claudeAiOauth", {})
     idx["accounts"][name] = {
         "email": oauth.get("emailAddress"),
@@ -659,12 +658,12 @@ def cmd_login(args):
     new_oauth, _ = current_identity()
     new_uuid = new_oauth.get("accountUuid")
     if not new_uuid:
-        die("login finished but no account could be read — try `claude-auth add`")
+        die("login finished but no account could be read — try `claudex add`")
 
     email = new_oauth.get("emailAddress") or ""
     name = args.name or (email.split("@")[0] if email else None)
     if not name:
-        die("could not infer a name; pass one: claude-auth login <name>")
+        die("could not infer a name; pass one: claudex login <name>")
 
     for n, p in idx["accounts"].items():
         if p.get("accountUuid") == new_uuid and n != name:
@@ -682,7 +681,7 @@ def cmd_add(args):
     email = oauth.get("emailAddress") or ""
     name = args.name or (email.split("@")[0] if email else None)
     if not name:
-        die("could not infer a name; pass one: claude-auth add <name>")
+        die("could not infer a name; pass one: claudex add <name>")
     if name in idx["accounts"] and not args.force:
         die(f"'{name}' already exists — pass {bold('--force')} to overwrite")
     info()
@@ -698,8 +697,8 @@ def cmd_list(args):
     info()
     if not accts:
         hint("No saved accounts yet.")
-        info(IND + dim("Get started:  ") + clay("claude-auth login <name>") +
-             dim("  or  ") + clay("claude-auth add"))
+        info(IND + dim("Get started:  ") + clay("claudex login <name>") +
+             dim("  or  ") + clay("claudex add"))
         info()
         return
 
@@ -755,7 +754,7 @@ def cmd_list(args):
     info(IND + green("●") + dim(" active") + "    " + dim("○ saved"))
     if not active:
         info()
-        warn("active account isn't saved yet — run " + clay("claude-auth add"))
+        warn("active account isn't saved yet — run " + clay("claudex add"))
     info()
 
 def cmd_current(args):
@@ -774,7 +773,7 @@ def cmd_current(args):
             info(IND * 2 + dim(meta))
     elif email:
         info(IND + yellow("●") + " " + ink(email) + dim("   (not saved)"))
-        info(IND * 2 + dim("run ") + clay("claude-auth add") + dim(" to save it"))
+        info(IND * 2 + dim("run ") + clay("claudex add") + dim(" to save it"))
     else:
         hint("not logged in")
     info()
@@ -959,7 +958,7 @@ def cmd_sessions(args):
     info(IND + border("└", "┴", "┘"))
     info()
     info(IND + green("●") + dim(" kept warm") + "    " + dim("○ not warmed"))
-    info(IND + dim("pick by id, prefix, or project:  ") + clay("claude-auth keep-warm add <id|project>"))
+    info(IND + dim("pick by id, prefix, or project:  ") + clay("claudex keep-warm add <id|project>"))
     info()
 
 def _token_for(name, idx, active):
@@ -1004,7 +1003,7 @@ def cmd_usage(args):
     accts = idx["accounts"]
     if not accts:
         info()
-        hint("No saved accounts yet — run " + clay("claude-auth login <name>"))
+        hint("No saved accounts yet — run " + clay("claudex login <name>"))
         info()
         return
     active = active_name(idx)
@@ -1120,7 +1119,7 @@ def _usage_detail(name, idx, res, active):
     if not u:
         warn(f"usage unavailable ({res['error']})")
         if name != active:
-            hint("the stored token may be expired — " + clay(f"claude-auth switch {name}") +
+            hint("the stored token may be expired — " + clay(f"claudex switch {name}") +
                  dim(" refreshes it"))
         info()
         return
@@ -1211,7 +1210,7 @@ def cmd_switch(args):
     idx = load_index()
     accts = idx["accounts"]
     if not accts:
-        die("no saved accounts yet — run " + clay("claude-auth login <name>"))
+        die("no saved accounts yet — run " + clay("claudex login <name>"))
 
     name = args.name
     if not name:
@@ -1273,7 +1272,7 @@ def cmd_rename(args):
         die(f"'{args.new}' already exists")
     raw = kc_read(STORE_SERVICE, args.old)
     if raw is not None:
-        kc_write(STORE_SERVICE, args.new, raw, label=f"claude-auth: {args.new}")
+        kc_write(STORE_SERVICE, args.new, raw, label=f"claudex: {args.new}")
         kc_delete(STORE_SERVICE, args.old)
     idx["accounts"][args.new] = idx["accounts"].pop(args.old)
     save_index(idx)
@@ -1331,7 +1330,7 @@ def _as_log(msg):
 # ---- settings.json hook management ----
 
 def _bin_path():
-    return shutil.which("claude-auth") or os.path.join(HOME, ".local/bin/claude-auth")
+    return shutil.which("claudex") or os.path.join(HOME, ".local/bin/claudex")
 
 def _self_bin():
     """Path to re-spawn a same-version child daemon: the running script itself if it's
@@ -1362,14 +1361,17 @@ def _read_settings():
 
 def _write_settings(data):
     os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
-    tmp = SETTINGS + ".claude-auth.tmp"
+    tmp = SETTINGS + ".claudex.tmp"
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, SETTINGS)
 
 def _hook_is_ours(h):
-    return isinstance(h, dict) and "claude-auth" in h.get("command", "") \
-        and "autoswitch" in h.get("command", "")
+    if not isinstance(h, dict):
+        return False
+    cmd = h.get("command", "")
+    # accept the legacy "claude-auth" name too, so pre-rename hooks are still managed
+    return ("claudex" in cmd or "claude-auth" in cmd) and "autoswitch" in cmd
 
 def _install_hooks():
     """Install/refresh our Stop + SessionStart hooks. Returns list of new events."""
@@ -1467,7 +1469,7 @@ def _autoswitch_run(args):
     eligible = [(n, p) for n, p in scored if p is not None and p < thr]
     if not eligible:
         _as_log(f"{active} at {cur:.0f}% but no account under {thr}% — staying")
-        _notify("claude-auth", f"{active} at {cur:.0f}% — all accounts near limit, can't switch")
+        _notify("claudex", f"{active} at {cur:.0f}% — all accounts near limit, can't switch")
         if not args.quiet:
             warn(f"{active} at {cur:.0f}% but no account is under {thr}%")
         return
@@ -1493,7 +1495,7 @@ def _autoswitch_run(args):
     snapshot_into(active, idx, quiet=True)
     restore(target, idx)
     _as_log(f"auto-switched {active} ({cur:.0f}%) → {target} ({tgt_pct:.0f}%)")
-    _notify("claude-auth",
+    _notify("claudex",
             f"Switched {active} → {target} ({window} {cur:.0f}%). Restart Claude Code to use it.")
     if not args.quiet:
         info()
@@ -1524,7 +1526,7 @@ def _autoswitch_status(idx, cfg):
     if on:
         hint("runs when Claude goes idle (Stop hook) · a switch applies on next restart")
     else:
-        hint("enable with " + clay("claude-auth autoswitch on"))
+        hint("enable with " + clay("claudex autoswitch on"))
     info()
 
 def cmd_autoswitch(args):
@@ -1661,7 +1663,7 @@ def _pool_persist_token(name, token, refresh, expires_in):
         # write the keychain item directly (avoid kc_write's die-on-error)
         subprocess.run(
             ["security", "add-generic-password", "-U", "-s", STORE_SERVICE,
-             "-a", name, "-w", json.dumps(blob), "-l", f"claude-auth: {name}"],
+             "-a", name, "-w", json.dumps(blob), "-l", f"claudex: {name}"],
             capture_output=True, text=True)
     except Exception:
         pass
@@ -1765,7 +1767,7 @@ def _pantry_headers():
     # getpantry.cloud sits behind Cloudflare, which 403s the default urllib
     # User-Agent (error 1010) — send a real one.
     return {"Content-Type": "application/json",
-            "User-Agent": f"claude-auth/{__version__}"}
+            "User-Agent": f"claudex/{__version__}"}
 
 def _pantry_retry_after(e, default=2):
     try:
@@ -2191,7 +2193,7 @@ def _empty_tally():
 
 class PoolHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = f"claude-auth-pool/{__version__}"
+    server_version = f"claudex-pool/{__version__}"
 
     def log_message(self, fmt, *a):          # quiet stderr; everything goes to the log file
         _pool_log(fmt % a)
@@ -2231,7 +2233,7 @@ class PoolHandler(BaseHTTPRequestHandler):
         acct = POOL.selected_account()
         if not acct:
             return self._send_json(503, _err_body(
-                "no pool account selected — run `claude-auth pool use <name>`"))
+                "no pool account selected — run `claudex pool use <name>`"))
         name = acct["name"]
         token = POOL.token_for(name)
         if not token:
@@ -2241,7 +2243,7 @@ class PoolHandler(BaseHTTPRequestHandler):
             name = acct["name"] if acct else name
         if not token:
             return self._send_json(502, _err_body(
-                f"no usable token for '{name}' — switch with `claude-auth pool use <name>`"))
+                f"no usable token for '{name}' — switch with `claudex pool use <name>`"))
         resp, conn, err = self._send(token, body)
         if err:
             return self._send_json(502, _err_body(f"pool could not reach the API ({err})"))
@@ -2401,7 +2403,7 @@ class PoolHandler(BaseHTTPRequestHandler):
         elif last and last[0] == "401":
             self._send_json(401, _err_body(
                 "all pooled tokens were rejected (expired or rotated) — the owners should "
-                "re-contribute with `claude-auth pool join <link>`"))
+                "re-contribute with `claudex pool join <link>`"))
         else:
             detail = last[1] if last else "unknown error"
             self._send_json(502, _err_body(f"pool could not reach the API ({detail})"))
@@ -2495,7 +2497,7 @@ def _pool_serve(args):
     if remote:
         cfg = _remote_config()
         if not cfg:
-            die("no shared pool joined — run `claude-auth pool join <link>` first")
+            die("no shared pool joined — run `claudex pool join <link>` first")
         POOL = _Pool(args.mode or "failover", store=_store_from_config(cfg),
                      consumer_id=cfg.get("memberId"))
     else:
@@ -2561,15 +2563,15 @@ def _pool_start(args):
         except Exception as e:
             die(f"couldn't reach the shared pool: {e}")
         if n == 0:
-            die("the shared pool has no members yet — run " + clay("claude-auth pool join <link>"))
+            die("the shared pool has no members yet — run " + clay("claudex pool join <link>"))
     else:
         idx = load_index()
         n = len(idx["accounts"])
         if n == 0:
-            die("no saved accounts — run " + clay("claude-auth login") + " or " + clay("add") + " first")
+            die("no saved accounts — run " + clay("claudex login") + " or " + clay("add") + " first")
     pid = _pool_pid()
     if pid:
-        die(f"pool already running (pid {pid}) — run " + clay("claude-auth pool stop") + " first")
+        die(f"pool already running (pid {pid}) — run " + clay("claudex pool stop") + " first")
     port = args.port or DEFAULT_POOL_PORT
     mode = args.mode or "failover"
     src = "shared pool" if cfg else "local accounts"
@@ -2601,10 +2603,10 @@ def _pool_start(args):
             m = _store_from_config(cfg).load().get("members", {}).get(sel, {})
             if m:
                 hint("serving from " + clay(m.get("name") or sel) +
-                     dim(" · switch live with ") + clay("claude-auth pool use <name>"))
+                     dim(" · switch live with ") + clay("claudex pool use <name>"))
         except Exception:
             pass
-    hint("stop anytime with " + clay("claude-auth pool stop"))
+    hint("stop anytime with " + clay("claudex pool stop"))
     info()
 
 def _pool_stop(args):
@@ -2639,7 +2641,7 @@ def _pool_status(args):
     info()
     if not pid:
         info(IND + dim("○") + " " + dim("not running"))
-        hint("start with " + clay("claude-auth pool start"))
+        hint("start with " + clay("claudex pool start"))
         info()
         return
     port = st.get("port", DEFAULT_POOL_PORT)
@@ -2742,7 +2744,7 @@ def cmd_pool_create(args):
     info(IND + bold(clay("Create shared pool")))
     info()
     if not pantry_id:
-        die("usage: " + clay("claude-auth pool create <pantry-id>") + "\n" +
+        die("usage: " + clay("claudex pool create <pantry-id>") + "\n" +
             IND + dim("get a free pantry id (one per pool) at ") + cyan("https://getpantry.cloud"))
     key = secrets.token_bytes(32)
     store = PoolStore(pantry_id, key)
@@ -2761,7 +2763,7 @@ def cmd_pool_create(args):
     info()
     entry, n = _do_join(link)
     ok(f"You joined as {bold(clay(entry['name']))} {dim('· ' + (entry['email'] or ''))}")
-    hint(f"members: {n}  ·  start pooling with " + clay("claude-auth pool start"))
+    hint(f"members: {n}  ·  start pooling with " + clay("claudex pool start"))
     info()
 
 def cmd_pool_join(args):
@@ -2770,13 +2772,13 @@ def cmd_pool_join(args):
     info(IND + bold(clay("Join shared pool")))
     info()
     if not link:
-        die("usage: " + clay('claude-auth pool join "<pool-link>"'))
+        die("usage: " + clay('claudex pool join "<pool-link>"'))
     entry, n = _do_join(link)
     ok(f"Joined the pool as {bold(clay(entry['name']))} {dim('· ' + (entry['email'] or ''))}")
     hint(f"{n} member(s) · your token is now shared")
-    hint("start it with " + clay("claude-auth pool start") +
-         dim(", then pick who serves you with ") + clay("claude-auth pool use <name>"))
-    hint("leave with " + clay("claude-auth pool leave"))
+    hint("start it with " + clay("claudex pool start") +
+         dim(", then pick who serves you with ") + clay("claudex pool use <name>"))
+    hint("leave with " + clay("claudex pool leave"))
     info()
 
 def cmd_pool_leave(args):
@@ -2785,7 +2787,7 @@ def cmd_pool_leave(args):
     if not cfg:
         die("you haven't joined a shared pool")
     if _pool_pid() and _pool_read_state().get("remote"):
-        die("the pool proxy is running — run " + clay("claude-auth pool stop") + " first")
+        die("the pool proxy is running — run " + clay("claudex pool stop") + " first")
     store = _store_from_config(cfg)
     try:
         pool = store.load()
@@ -2840,7 +2842,7 @@ def cmd_pool_members(args):
     cfg = _remote_config()
     info()
     if not cfg:
-        die("you haven't joined a shared pool — " + clay("claude-auth pool join <link>"))
+        die("you haven't joined a shared pool — " + clay("claudex pool join <link>"))
     try:
         pool = _store_from_config(cfg).load()
     except Exception as e:
@@ -2882,8 +2884,8 @@ def cmd_pool_members(args):
     info(IND + dim("contributed = tokens this member's token served · consumed = tokens they ran"))
     if not live:
         info(IND + dim("add ") + clay("--live") + dim(" for up-to-the-second counts · live rate limits: ") +
-             clay("claude-auth pool usage"))
-    info(IND + dim("switch which token serves you:  ") + clay("claude-auth pool use <name>"))
+             clay("claudex pool usage"))
+    info(IND + dim("switch which token serves you:  ") + clay("claudex pool use <name>"))
     info()
 
 def cmd_pool_usage(args):
@@ -2893,7 +2895,7 @@ def cmd_pool_usage(args):
     cfg = _remote_config()
     info()
     if not cfg:
-        die("you haven't joined a shared pool — " + clay("claude-auth pool join <link>"))
+        die("you haven't joined a shared pool — " + clay("claudex pool join <link>"))
     store = _store_from_config(cfg)
     try:
         pool = store.load()
@@ -2982,7 +2984,7 @@ def cmd_pool_usage(args):
     info(IND + sev_color(10)("█") + dim(" <50%   ") + sev_color(60)("█") +
          dim(" <80%   ") + sev_color(90)("█") + dim(" ≥80%") +
          dim("      ▶ serving you"))
-    info(IND + dim("switch to the one with the most headroom:  ") + clay("claude-auth pool use <name>"))
+    info(IND + dim("switch to the one with the most headroom:  ") + clay("claudex pool use <name>"))
     info()
 
 def _resolve_member(pool, target):
@@ -3000,7 +3002,7 @@ def cmd_pool_use(args):
     cfg = _remote_config()
     info()
     if not cfg:
-        die("you haven't joined a shared pool — " + clay("claude-auth pool join <link>"))
+        die("you haven't joined a shared pool — " + clay("claudex pool join <link>"))
     target = args.target
     try:
         pool = _store_from_config(cfg).load()
@@ -3015,12 +3017,12 @@ def cmd_pool_use(args):
             mark = green("●") if mid == cur else dim("○")
             info(IND + mark + " " + (bold(clay(m.get("name", mid))) if mid == cur else ink(m.get("name", mid))))
         info()
-        hint("switch with " + clay("claude-auth pool use <name>"))
+        hint("switch with " + clay("claudex pool use <name>"))
         info()
         return
     mid, m = _resolve_member(pool, target)
     if not mid:
-        die(f"no pool member '{target}' — see " + clay("claude-auth pool members"))
+        die(f"no pool member '{target}' — see " + clay("claudex pool members"))
     cfg["selectedMemberId"] = mid
     _save_remote_config(cfg)
     ok(f"Now serving from {bold(clay(m.get('name') or mid))} {dim('· ' + (m.get('email') or ''))}")
@@ -3028,7 +3030,7 @@ def cmd_pool_use(args):
         hint("running Claude Code sessions switch to it on their next request " +
              dim("— no restart needed"))
     else:
-        hint("start the pool with " + clay("claude-auth pool start") + dim(" to route through it"))
+        hint("start the pool with " + clay("claudex pool start") + dim(" to route through it"))
     info()
 
 def cmd_pool_remove(args):
@@ -3039,8 +3041,8 @@ def cmd_pool_remove(args):
         die("you haven't joined a shared pool")
     target = args.target
     if not target:
-        die("usage: " + clay("claude-auth pool remove <name>") +
-            dim("   ·   see ") + clay("claude-auth pool members"))
+        die("usage: " + clay("claudex pool remove <name>") +
+            dim("   ·   see ") + clay("claudex pool members"))
     store = _store_from_config(cfg)
     try:
         pool = store.load()
@@ -3048,7 +3050,7 @@ def cmd_pool_remove(args):
         die(f"couldn't reach the pool: {e}")
     mid, m = _resolve_member(pool, target)
     if not mid:
-        die(f"no pool member '{target}' — see " + clay("claude-auth pool members"))
+        die(f"no pool member '{target}' — see " + clay("claudex pool members"))
     name = m.get("name") or mid
     pool.get("members", {}).pop(mid, None)
     pool.get("served", {}).pop(mid, None)
@@ -3149,7 +3151,7 @@ def cmd_session(args):
 
     # (a) the account must exist …
     if name not in idx["accounts"]:
-        die(f"no saved account {clay(name)} — see " + clay("claude-auth list"))
+        die(f"no saved account {clay(name)} — see " + clay("claudex list"))
 
     # (b) … and have a usable stored token, so the forwarder never 503s mid-flight
     raw = kc_read(STORE_SERVICE, name)
@@ -3160,7 +3162,7 @@ def cmd_session(args):
         except Exception:
             has_token = False
     if not has_token:
-        die(f"{clay(name)} has no stored token — run " + clay(f"claude-auth refresh {name}"))
+        die(f"{clay(name)} has no stored token — run " + clay(f"claudex refresh {name}"))
 
     # (c) pinned in-process forwarder on an OS-assigned ephemeral port
     POOL = _Pool("failover", only=name)
@@ -3225,9 +3227,9 @@ def _version_tuple(s):
     return tuple(parts) or (0,)
 
 def fetch_remote_script(timeout=10):
-    """Download the latest bin/claude-auth from GitHub. Returns (text, err)."""
+    """Download the latest bin/claudex from GitHub. Returns (text, err)."""
     req = urllib.request.Request(RAW_SCRIPT_URL, headers={
-        "User-Agent": f"claude-auth/{__version__}",
+        "User-Agent": f"claudex/{__version__}",
         "Cache-Control": "no-cache",
     })
     try:
@@ -3241,19 +3243,37 @@ def fetch_remote_script(timeout=10):
 _VERSION_RE = re.compile(r'''^__version__\s*=\s*["']([^"']+)["']''', re.M)
 
 def parse_script_version(text):
-    """Pull the __version__ string out of a claude-auth script body."""
+    """Pull the __version__ string out of a claudex script body."""
     m = _VERSION_RE.search(text or "")
     return m.group(1) if m else None
 
 def _self_path():
-    """Absolute path of the running claude-auth script (symlinks resolved)."""
+    """Absolute path of the running claudex script (symlinks resolved)."""
     return os.path.realpath(os.path.abspath(__file__))
+
+def _is_brew_install():
+    """True if the running script lives under a Homebrew prefix (managed by brew,
+    so self-update would corrupt brew's bookkeeping / hit a read-only Cellar)."""
+    p = _self_path()
+    prefix = os.environ.get("HOMEBREW_PREFIX", "")
+    return ("/Cellar/" in p
+            or "/opt/homebrew/" in p
+            or p.startswith("/usr/local/Cellar")
+            or bool(prefix and p.startswith(prefix)))
 
 def cmd_update(args):
     """Download the latest script from GitHub and replace this file in place."""
     info()
     info(IND + bold(clay("Update")) + dim("   ·   " + REPO))
     info()
+
+    # Homebrew manages its own copy in a read-only Cellar — never self-overwrite it.
+    if _is_brew_install():
+        info(IND + yellow("●") + " installed via Homebrew — update with " +
+             clay("brew upgrade claudex"))
+        info(IND * 2 + dim("(self-update is disabled for brew installs so brew stays authoritative)"))
+        info()
+        return
 
     text, err = fetch_remote_script()
     if err:
@@ -3270,7 +3290,7 @@ def cmd_update(args):
         if newer:
             info(IND + yellow("●") + " update available  " +
                  dim(f"v{local} → ") + bold(green(f"v{remote}")))
-            info(IND * 2 + dim("run ") + clay("claude-auth update") + dim(" to install"))
+            info(IND * 2 + dim("run ") + clay("claudex update") + dim(" to install"))
         elif same:
             ok(f"up to date  (v{local})")
         else:
@@ -3291,7 +3311,7 @@ def cmd_update(args):
 
     # Never overwrite ourselves with something that isn't valid Python.
     try:
-        compile(text, "<remote claude-auth>", "exec")
+        compile(text, "<remote claudex>", "exec")
     except SyntaxError as e:
         die(f"downloaded script failed to parse ({e}) — refusing to install")
 
@@ -3344,9 +3364,9 @@ def cmd_doctor(args):
     else:
         check("warn", "claude CLI", "not on PATH (only `login` needs it)")
 
-    # claude-auth itself on PATH (hooks + statusline call it by name)
-    capath = shutil.which("claude-auth")
-    check("ok" if capath else "warn", "claude-auth on PATH",
+    # claudex itself on PATH (hooks + statusline call it by name)
+    capath = shutil.which("claudex")
+    check("ok" if capath else "warn", "claudex on PATH",
           capath or "not found — hooks/statusline may fail")
 
     # latest version (best-effort — skipped silently when offline)
@@ -3355,7 +3375,7 @@ def cmd_doctor(args):
         remote = parse_script_version(rtext)
         if remote and _version_tuple(remote) > _version_tuple(__version__):
             check("warn", "version",
-                  f"v{__version__} — update available (v{remote}): run `claude-auth update`")
+                  f"v{__version__} — update available (v{remote}): run `claudex update`")
         elif remote:
             check("ok", "version", f"v{__version__} (latest)")
 
@@ -3367,12 +3387,12 @@ def cmd_doctor(args):
     # saved accounts
     n = len(idx["accounts"])
     check("ok" if n else "warn", f"{n} account(s) saved",
-          "" if n else "run `claude-auth add` or `login`")
+          "" if n else "run `claudex add` or `login`")
 
     # active account
     active = active_name(idx)
     check("ok" if active else "warn", "active account",
-          active or "current login isn't saved as a profile (run `claude-auth add`)")
+          active or "current login isn't saved as a profile (run `claudex add`)")
 
     # autoswitch + hooks
     cfg = _as_config(idx)
@@ -3380,13 +3400,13 @@ def cmd_doctor(args):
         hn = _hook_installed()
         check("ok" if hn == 2 else "warn", "autoswitch",
               "Stop + SessionStart hooks present" if hn == 2
-              else f"enabled but {hn}/2 hooks — re-run `claude-auth autoswitch on`")
+              else f"enabled but {hn}/2 hooks — re-run `claudex autoswitch on`")
     else:
         check("ok", "autoswitch", "disabled")
 
     # statusline wiring (informational)
     slcmd = (_read_settings().get("statusLine") or {}).get("command", "")
-    if "claude-auth statusline" in slcmd:
+    if "claudex statusline" in slcmd or "claude-auth statusline" in slcmd:
         check("ok", "statusline", "wired into settings.json")
 
     # pool proxy (informational — only shown when running or wired)
@@ -3396,10 +3416,10 @@ def cmd_doctor(args):
     if ppid and pmine:
         check("ok", "pool", f"running (pid {ppid}) and wired into settings.json")
     elif ppid and not pmine:
-        check("warn", "pool", "running but not wired — `claude-auth pool start` to wire it")
+        check("warn", "pool", "running but not wired — `claudex pool start` to wire it")
     elif pmine and not ppid:
         check("warn", "pool",
-              "settings.json points at a pool that isn't running — `claude-auth pool stop`")
+              "settings.json points at a pool that isn't running — `claudex pool stop`")
 
     # per-account token freshness (offline — reads keychain, no network)
     if idx["accounts"]:
@@ -3418,7 +3438,7 @@ def cmd_doctor(args):
             elif fresh:
                 check("ok", name, "token valid")
             else:
-                check("warn", name, "token stale — refreshes on next use, or `claude-auth refresh " + name + "`")
+                check("warn", name, "token stale — refreshes on next use, or `claudex refresh " + name + "`")
 
     info()
     summary = f"{counts['ok']} ok"
@@ -3443,7 +3463,7 @@ _claude_auth() {
   sub="${COMP_WORDS[1]}"
   case "$sub" in
     switch|session|usage|rename|remove|rm|refresh)
-      COMPREPLY=( $(compgen -W "$(claude-auth completion --names 2>/dev/null)" -- "$cur") ) ;;
+      COMPREPLY=( $(compgen -W "$(claudex completion --names 2>/dev/null)" -- "$cur") ) ;;
     autoswitch) COMPREPLY=( $(compgen -W "on off status run" -- "$cur") ) ;;
     keep-warm) COMPREPLY=( $(compgen -W "start stop status list add rm --last --interval --max" -- "$cur") ) ;;
     pool) COMPREPLY=( $(compgen -W "start stop status create join leave members use usage remove clear" -- "$cur") ) ;;
@@ -3451,7 +3471,7 @@ _claude_auth() {
     completion) COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") ) ;;
   esac
 }
-complete -F _claude_auth claude-auth
+complete -F _claude_auth claudex
 '''.strip()
 
 _ZSH_COMPLETION = r'''
@@ -3461,7 +3481,7 @@ _claude_auth() {
   if (( CURRENT == 2 )); then compadd -- $cmds; return; fi
   case "${words[2]}" in
     switch|session|usage|rename|remove|rm|refresh)
-      compadd -- ${(f)"$(claude-auth completion --names 2>/dev/null)"} ;;
+      compadd -- ${(f)"$(claudex completion --names 2>/dev/null)"} ;;
     autoswitch) compadd -- on off status run ;;
     keep-warm) compadd -- start stop status list add rm --last --interval --max ;;
     pool) compadd -- start stop status create join leave members use usage remove clear ;;
@@ -3469,7 +3489,7 @@ _claude_auth() {
     completion) compadd -- bash zsh ;;
   esac
 }
-compdef _claude_auth claude-auth
+compdef _claude_auth claudex
 '''.strip()
 
 _COMMAND_REFERENCE = [
@@ -3505,7 +3525,7 @@ _COMMAND_REFERENCE = [
         ("statusline", "",         "Compact status line for Claude Code", "--plain"),
         ("completion", "[bash|zsh]", "Output a shell-completion script", ""),
         ("doctor",     "",         "Health-check your setup", ""),
-        ("update",     "",         "Update claude-auth to the latest version", "--check --force"),
+        ("update",     "",         "Update claudex to the latest version", "--check --force"),
     ]),
     ("MISC", [
         ("commands",   "",         "Show this command reference", ""),
@@ -3519,7 +3539,7 @@ def cmd_commands(args):
     nw = max(len(r[0]) for r in rows)
     aw = max(len(r[1]) for r in rows)
     info()
-    info(IND + bold(clay("Commands")) + dim(f"   ·   claude-auth v{__version__}"))
+    info(IND + bold(clay("Commands")) + dim(f"   ·   claudex v{__version__}"))
     for title, group in _COMMAND_REFERENCE:
         info()
         info(IND + bold(clay(title)))
@@ -3545,10 +3565,10 @@ def cmd_completion(args):
         info(IND + bold(clay("Shell completion")) + dim("   ·   tab-complete commands & account names"))
         info()
         info(IND + dim("zsh") + "  — add to " + ink("~/.zshrc") + ":")
-        info(IND * 2 + clay('eval "$(claude-auth completion zsh)"'))
+        info(IND * 2 + clay('eval "$(claudex completion zsh)"'))
         info()
         info(IND + dim("bash") + " — add to " + ink("~/.bashrc") + ":")
-        info(IND * 2 + clay('eval "$(claude-auth completion bash)"'))
+        info(IND * 2 + clay('eval "$(claudex completion bash)"'))
         info()
 
 # ──────────────────────────── arg parsing ─────────────────────────────────
@@ -3560,7 +3580,7 @@ class BrandParser(argparse.ArgumentParser):
         _play_cat()
         (file or sys.stdout).write(self.format_help())
     def error(self, message):
-        die(message + dim("   ·   see ") + clay("claude-auth --help"), code=2)
+        die(message + dim("   ·   see ") + clay("claudex --help"), code=2)
 
 # ═══════════════════════════════ keep-warm ═════════════════════════════════
 # Keep a *specific* Claude Code session's prompt cache alive. The 1-hour cache
@@ -3627,7 +3647,7 @@ class _SessionStore:
 
 
 def _account_name_for_uuid(uuid, _cache={}):
-    """Map a request's account_uuid to a saved claude-auth account name (for token refresh)."""
+    """Map a request's account_uuid to a saved claudex account name (for token refresh)."""
     if not uuid:
         return None
     if uuid not in _cache:
@@ -3679,7 +3699,7 @@ class KeepWarmHandler(BaseHTTPRequestHandler):
     forwards verbatim, and captures each session's exact request bytes keyed by
     X-Claude-Code-Session-Id so keep-warm can replay them later."""
     protocol_version = "HTTP/1.1"
-    server_version = f"claude-auth-keepwarm/{__version__}"
+    server_version = f"claudex-keepwarm/{__version__}"
 
     def log_message(self, fmt, *a):
         _kw_log(fmt % a)
@@ -3902,9 +3922,9 @@ def _kw_serve(args):
 
 def _kw_start(args):
     if _kw_pid():
-        die(f"keep-warm already running (pid {_kw_pid()}) — " + clay("claude-auth keep-warm stop") + " first")
+        die(f"keep-warm already running (pid {_kw_pid()}) — " + clay("claudex keep-warm stop") + " first")
     if _pool_pid():
-        die("a pool is running — it owns ANTHROPIC_BASE_URL. Run " + clay("claude-auth pool stop") + " first.")
+        die("a pool is running — it owns ANTHROPIC_BASE_URL. Run " + clay("claudex pool stop") + " first.")
     port = args.port or DEFAULT_KW_PORT
     interval = min(args.interval or 50, 55) * 60
     maxidle = (getattr(args, "max", None) or 8) * 3600
@@ -3926,7 +3946,7 @@ def _kw_start(args):
     else:
         ok(f"Keep-warm live on {clay(f'http://127.0.0.1:{port}')}")
         hint("point Claude Code at it:  " + clay(f"export ANTHROPIC_BASE_URL=http://127.0.0.1:{port}"))
-    hint("then " + clay("claude-auth sessions") + dim(" to find one, ") +
+    hint("then " + clay("claudex sessions") + dim(" to find one, ") +
          clay("keep-warm add <id>") + dim(" to warm it"))
     info()
 
@@ -3968,7 +3988,7 @@ def _kw_add(args, on):
                 info(IND * 2 + clay(s["id"][:8]) + dim(f"  {s['project']} · {s['branch']}"))
             hint("use the 8-char id instead")
         else:
-            die(f"no session matches '{args.target or '--last'}' — see " + clay("claude-auth sessions"))
+            die(f"no session matches '{args.target or '--last'}' — see " + clay("claudex sessions"))
         info()
         return
     st = _kw_read_state()
@@ -3980,7 +4000,7 @@ def _kw_add(args, on):
     if on:
         ok(f"warming session {clay(short)}")
         if not _kw_pid():
-            hint("keep-warm isn't running yet — " + clay("claude-auth keep-warm start"))
+            hint("keep-warm isn't running yet — " + clay("claudex keep-warm start"))
         elif sid not in _keepwarm_captured_ids():
             hint("not captured yet — it'll warm once a request from it flows through the proxy")
     else:
@@ -3991,7 +4011,7 @@ def cmd_kw_status(args):
     running = _kw_pid()
     info()
     if not running:
-        hint("keep-warm not running — start it with " + clay("claude-auth keep-warm start"))
+        hint("keep-warm not running — start it with " + clay("claudex keep-warm start"))
         info()
         return
     snap, st = _kw_snapshot()
@@ -4036,10 +4056,10 @@ def cmd_keep_warm(args):
 
 
 def build_parser():
-    p = BrandParser(prog="claude-auth", add_help=True,
+    p = BrandParser(prog="claudex", add_help=True,
                     description="Switch between multiple Claude Code accounts (macOS).")
     p.add_argument("-V", "--version", action="version",
-                   version=f"claude-auth {__version__}")
+                   version=f"claudex {__version__}")
     sub = p.add_subparsers(dest="cmd")
 
     lg = sub.add_parser("login", help="sign in fresh and save the result as a profile")
@@ -4169,7 +4189,7 @@ def build_parser():
     comp.add_argument("--names", action="store_true", help=argparse.SUPPRESS)
     comp.set_defaults(func=cmd_completion)
 
-    up = sub.add_parser("update", help="update claude-auth to the latest version")
+    up = sub.add_parser("update", help="update claudex to the latest version")
     up.add_argument("--check", action="store_true", help="only check; don't install")
     up.add_argument("--force", action="store_true", help="reinstall even if already up to date")
     up.set_defaults(func=cmd_update)
@@ -4178,7 +4198,7 @@ def build_parser():
 
 def main():
     if sys.platform != "darwin":
-        die("claude-auth currently supports macOS only (uses the login Keychain).")
+        die("claudex currently supports macOS only (uses the login Keychain).")
     parser = build_parser()
     args = parser.parse_args()
     if not getattr(args, "func", None):

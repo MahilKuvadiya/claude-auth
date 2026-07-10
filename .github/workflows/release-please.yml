@@ -1,0 +1,43 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          # A PAT (not the default GITHUB_TOKEN) so the Release PR triggers CI
+          # and the release event can fan out to the Homebrew tap.
+          token: ${{ secrets.RELEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Everything below runs only when a Release PR is merged (a real release).
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.release_created }}
+
+      - name: Attach the single-file script to the GitHub Release
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: gh release upload ${{ steps.release.outputs.tag_name }} bin/claudex --clobber
+
+      - name: Bump the Homebrew tap formula
+        if: ${{ steps.release.outputs.release_created }}
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: claudex
+          formula-path: Formula/claudex.rb
+          homebrew-tap: vishalmakwana111/homebrew-claudex
+          download-url: https://github.com/vishalmakwana111/claudex/archive/refs/tags/${{ steps.release.outputs.tag_name }}.tar.gz
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

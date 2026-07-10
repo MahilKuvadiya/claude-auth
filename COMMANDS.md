@@ -1,14 +1,14 @@
-# claude-auth — Command Reference
+# claudex — Command Reference
 
 Every command, every flag, with examples. For the pitch, install, and quick start, see the **[README](README.md)**. For internals (storage layout, the in-place-update trick, the proxy design), see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
-`claude-auth commands` prints a condensed version of this table in your terminal.
+`claudex commands` prints a condensed version of this table in your terminal.
 
 ---
 
 ## Conventions
 
-- Invocation is always `claude-auth <command> [args] [flags]`.
+- Invocation is always `claudex <command> [args] [flags]`.
 - `<required>` · `[optional]` · `a|b` = choose one.
 - **Aliases** are noted per command (`list`/`ls`, `current`/`whoami`, `remove`/`rm`).
 - Output is rendered in Claude's warm "clay" palette. Color auto-disables when piped or when **`NO_COLOR`** is set.
@@ -31,7 +31,7 @@ Every command, every flag, with examples. For the pitch, install, and quick star
 Drive the real `claude auth login` browser flow, then auto-save the result as a named profile.
 
 ```
-claude-auth login [name] [--email <addr>] [--console] [--sso]
+claudex login [name] [--email <addr>] [--console] [--sso]
 ```
 
 | Arg / flag | Meaning |
@@ -42,8 +42,8 @@ claude-auth login [name] [--email <addr>] [--console] [--sso]
 | `--sso` | Force the SSO login flow. |
 
 ```bash
-claude-auth login work                 # opens the browser; saved as "work"
-claude-auth login client --email me@client.com
+claudex login work                 # opens the browser; saved as "work"
+claudex login client --email me@client.com
 ```
 
 > Requires the `claude` CLI on your `PATH`.
@@ -53,7 +53,7 @@ claude-auth login client --email me@client.com
 Save the account you're **currently** logged into as a named profile — no browser flow.
 
 ```
-claude-auth add [name] [-f|--force]
+claudex add [name] [-f|--force]
 ```
 
 | Arg / flag | Meaning |
@@ -62,7 +62,7 @@ claude-auth add [name] [-f|--force]
 | `-f`, `--force` | Overwrite an existing profile of the same name. |
 
 ```bash
-claude-auth add personal
+claudex add personal
 ```
 
 ### `switch`
@@ -70,7 +70,7 @@ claude-auth add personal
 Switch the machine-wide login to a saved account. Swaps **both** the Keychain credential and the `~/.claude.json` identity, atomically.
 
 ```
-claude-auth switch [name] [-f|--force] [--no-save]
+claudex switch [name] [-f|--force] [--no-save]
 ```
 
 | Arg / flag | Meaning |
@@ -80,8 +80,8 @@ claude-auth switch [name] [-f|--force] [--no-save]
 | `--no-save` | Don't refresh the outgoing account's stored copy before leaving it. |
 
 ```bash
-claude-auth switch work
-claude-auth switch              # interactive picker
+claudex switch work
+claudex switch              # interactive picker
 ```
 
 > **Restart Claude Code after switching.** A running session holds the old token in memory; the swap only affects new sessions. To move a *running* session, use [`pool`](#pool-local) instead.
@@ -91,7 +91,7 @@ claude-auth switch              # interactive picker
 Run **one** Claude Code session pinned to a specific account, leaving your global login and every other session untouched.
 
 ```
-claude-auth session <account> [--no-launch] [-- <claude args>...]
+claudex session <account> [--no-launch] [-- <claude args>...]
 ```
 
 | Arg / flag | Meaning |
@@ -101,10 +101,10 @@ claude-auth session <account> [--no-launch] [-- <claude args>...]
 | `-- <claude args>` | Everything after `--` is passed straight through to `claude`. |
 
 ```bash
-claude-auth session work
-claude-auth session work -- --resume
-claude-auth session work -- -p "summarize this repo"
-claude-auth session work --no-launch      # point your own tool at the printed URL
+claudex session work
+claudex session work -- --resume
+claudex session work -- -p "summarize this repo"
+claudex session work --no-launch      # point your own tool at the printed URL
 ```
 
 **How it stays scoped:** on macOS the credential is a single machine-wide Keychain item, so there's no per-process credential to swap. `session` runs a tiny in-process loopback proxy pinned to the one account (ephemeral port, no daemon, no files) and hands *only that `claude` child* its own `ANTHROPIC_BASE_URL`. A process env var overrides `settings.json`, so it wins even if `pool` is running. When the session ends, the proxy ends with it. Run as many pinned sessions at once as you like — each is its own process on its own port.
@@ -114,12 +114,12 @@ claude-auth session work --no-launch      # point your own tool at the printed U
 List saved accounts. `●` marks the active one.
 
 ```
-claude-auth list
-claude-auth ls
+claudex list
+claudex ls
 ```
 
 ```console
-$ claude-auth list
+$ claudex list
 
   Accounts   ·   2 saved
 
@@ -136,8 +136,8 @@ $ claude-auth list
 Show the active account.
 
 ```
-claude-auth current
-claude-auth whoami
+claudex current
+claudex whoami
 ```
 
 ### `rename`
@@ -145,11 +145,11 @@ claude-auth whoami
 Rename a saved profile (moves its Keychain backup too).
 
 ```
-claude-auth rename <old> <new>
+claudex rename <old> <new>
 ```
 
 ```bash
-claude-auth rename work acme
+claudex rename work acme
 ```
 
 ### `remove` (alias `rm`)
@@ -157,8 +157,8 @@ claude-auth rename work acme
 Delete a saved profile.
 
 ```
-claude-auth remove <name> [-f|--force]
-claude-auth rm <name>
+claudex remove <name> [-f|--force]
+claudex rm <name>
 ```
 
 | Arg / flag | Meaning |
@@ -175,7 +175,7 @@ claude-auth rm <name>
 Show plan tier + rate-limit usage (5-hour session and weekly) across **all** accounts — without switching. The fastest way to decide which account to switch to.
 
 ```
-claude-auth usage [name] [--quiet]
+claudex usage [name] [--quiet]
 ```
 
 | Arg / flag | Meaning |
@@ -184,7 +184,7 @@ claude-auth usage [name] [--quiet]
 | `--quiet` | Fetch & cache silently (no output). Used by background refreshers. |
 
 ```console
-$ claude-auth usage
+$ claudex usage
 
   Usage   ·   weekly limit is the one that bites
 
@@ -205,7 +205,7 @@ Usage comes from Anthropic's `/api/oauth/usage` endpoint (the same data Claude C
 Exchange each **inactive** account's refresh token for a fresh one (Anthropic's `POST /v1/oauth/token`), so `usage` stays live and switching never lands on a dead token.
 
 ```
-claude-auth refresh [name]
+claudex refresh [name]
 ```
 
 | Arg | Meaning |
@@ -219,7 +219,7 @@ Only touches **inactive** accounts — the active one is owned by Claude Code an
 Auto-switch to a fresher account when the active one's usage gets high. Installs Claude Code hooks so it only ever fires while a session is **idle**, never mid-prompt.
 
 ```
-claude-auth autoswitch [on|off|status|run]
+claudex autoswitch [on|off|status|run]
                        [--threshold <pct>] [--window session|week]
                        [--strategy next|lowest] [--interval <secs>]
                        [--force] [--dry-run] [--quiet]
@@ -243,10 +243,10 @@ claude-auth autoswitch [on|off|status|run]
 | `--quiet` | Suppress output (used by the hook). |
 
 ```bash
-claude-auth autoswitch on --threshold 90 --window session
-claude-auth autoswitch status
-claude-auth autoswitch run --force --dry-run    # preview the next decision
-claude-auth autoswitch off
+claudex autoswitch on --threshold 90 --window session
+claudex autoswitch status
+claudex autoswitch run --force --dry-run    # preview the next decision
+claudex autoswitch off
 ```
 
 **How it works:** it installs a **`Stop` hook** (Claude runs it the instant a response finishes and the session goes idle — the guarantee it never switches mid-prompt) and a **`SessionStart` hook** (a synchronous pre-flight that tries to switch *before* a new session loads its credentials). On each throttled idle check it reads the active account's usage; over threshold, it picks another account with headroom and swaps the credential. You get a macOS notification and a line in `~/.claude-accounts/autoswitch.log`.
@@ -258,7 +258,7 @@ claude-auth autoswitch off
 Run a local proxy (on `127.0.0.1`, your machine only) that pools **all** your accounts behind one endpoint and auto-fails-over on rate limits — **mid-conversation, no restart.**
 
 ```
-claude-auth pool [start|stop|status|serve]
+claudex pool [start|stop|status|serve]
                  [--port <n>] [--mode failover|balance] [--no-wire] [--local]
 ```
 
@@ -277,13 +277,13 @@ claude-auth pool [start|stop|status|serve]
 | `--local` | Serve the **local-Keychain** pool even if a shared pool is joined. |
 
 ```console
-$ claude-auth pool start
+$ claudex pool start
 
   › Starting pool on 127.0.0.1:8848 · mode failover
   ✓ Pool is live · Claude Code will use it on next start
   wired ANTHROPIC_BASE_URL into ~/.claude/settings.json
 
-$ claude-auth pool status
+$ claudex pool status
 
   ● running   pid 40127 · 127.0.0.1:8848 · mode failover
   personal   ready       served 142 · failovers 0
@@ -301,14 +301,14 @@ $ claude-auth pool status
 Pool accounts with **friends** — no server to host. Members' tokens live encrypted in a free [Pantry](https://getpantry.cloud) JSON store; everyone runs the same local proxy fed from that one shared blob.
 
 ```
-claude-auth pool create <pantry-id>
-claude-auth pool join   <link>
-claude-auth pool use    <name>
-claude-auth pool usage
-claude-auth pool members [--live]
-claude-auth pool remove <name>
-claude-auth pool leave
-claude-auth pool clear  [--yes]
+claudex pool create <pantry-id>
+claudex pool join   <link>
+claudex pool use    <name>
+claudex pool usage
+claudex pool members [--live]
+claudex pool remove <name>
+claudex pool leave
+claudex pool clear  [--yes]
 ```
 
 | Action | Meaning |
@@ -329,15 +329,15 @@ claude-auth pool clear  [--yes]
 
 ```bash
 # one person creates the pool
-claude-auth pool create <pantry-id>
+claudex pool create <pantry-id>
 #   → clpool:v1:pantry:<id>:<key>   (share with people you trust)
 
 # friends join, then run it and pick whose token serves them
-claude-auth pool join "clpool:v1:pantry:<id>:<key>"
-claude-auth pool start
-claude-auth pool use alice
-claude-auth pool usage       # live headroom per member
-claude-auth pool members     # who's in + token tallies (add --live)
+claudex pool join "clpool:v1:pantry:<id>:<key>"
+claudex pool start
+claudex pool use alice
+claudex pool usage       # live headroom per member
+claudex pool members     # who's in + token tallies (add --live)
 ```
 
 Unlike the local pool, the shared pool **does not auto-failover**: it serves the **one** account you selected (so prompt caching stays intact). If it gets rate-limited, `pool use <name>` to another member — live.
@@ -356,7 +356,7 @@ Unlike the local pool, the shared pool **does not auto-failover**: it serves the
 List your recent Claude Code sessions straight from disk (`~/.claude/projects/*/*.jsonl`) — no proxy, no setup. This is how you find the id (or project name) to hand to [`keep-warm`](#keep-warm).
 
 ```
-claude-auth sessions [--limit <n>]
+claudex sessions [--limit <n>]
 ```
 
 | Flag | Meaning |
@@ -364,7 +364,7 @@ claude-auth sessions [--limit <n>]
 | `--limit <n>` | Max sessions to show (default 25). |
 
 ```console
-$ claude-auth sessions
+$ claudex sessions
 
   Sessions   ·   3 recent
 
@@ -385,7 +385,7 @@ Each row shows the project (cwd), git branch, auto-title, context size, and idle
 Keep a specific idle session's prompt cache alive. Claude Code caches your conversation with a **1-hour** TTL; step away longer and the next turn re-sends the whole conversation at full price. While a warmed session sits idle, a local proxy replays its last request as a cheap **cache read** (~0.1× the context) every ~50 minutes, refreshing the 1-hour timer.
 
 ```
-claude-auth keep-warm [start|stop|status|add|rm|list]
+claudex keep-warm [start|stop|status|add|rm|list]
                       [<target>] [--last]
                       [--interval <min>] [--max <hrs>] [--no-wire]
 ```
@@ -407,10 +407,10 @@ claude-auth keep-warm [start|stop|status|add|rm|list]
 | `--no-wire` | Don't edit `settings.json`; just print the URL to set yourself. |
 
 ```console
-$ claude-auth keep-warm start          # starts the proxy, wires ANTHROPIC_BASE_URL
-$ claude-auth sessions                 # find the session id
-$ claude-auth keep-warm add ai-chatbot # warm it (by project, id, or --last)
-$ claude-auth keep-warm status
+$ claudex keep-warm start          # starts the proxy, wires ANTHROPIC_BASE_URL
+$ claudex sessions                 # find the session id
+$ claudex keep-warm add ai-chatbot # warm it (by project, id, or --last)
+$ claudex keep-warm status
   ● running   pid 40127 · 127.0.0.1:8849 · interval 50m · cap 8h
   ▶ 76ba159f  ai-chatbot  captured  · 3 pings · 123,450 read tok
 ```
@@ -430,7 +430,7 @@ $ claude-auth keep-warm status
 Print a compact, network-free status segment from cached usage — ideal for Claude Code's status line.
 
 ```
-claude-auth statusline [--plain] [--no-refresh]
+claudex statusline [--plain] [--no-refresh]
 ```
 
 | Flag | Meaning |
@@ -445,7 +445,7 @@ claude-auth statusline [--plain] [--no-refresh]
 Wire it into `~/.claude/settings.json`:
 
 ```jsonc
-"statusLine": { "type": "command", "command": "claude-auth statusline" }
+"statusLine": { "type": "command", "command": "claudex statusline" }
 ```
 
 It reads the cached snapshot (instant) and opportunistically kicks off a background refresh when the cache is older than 5 minutes, so it stays current without ever blocking a render.
@@ -455,18 +455,18 @@ It reads the cached snapshot (instant) and opportunistically kicks off a backgro
 Output a shell-completion script that tab-completes commands **and** account names.
 
 ```
-claude-auth completion [bash|zsh]
+claudex completion [bash|zsh]
 ```
 
 ```bash
 # zsh — add to ~/.zshrc:
-eval "$(claude-auth completion zsh)"
+eval "$(claudex completion zsh)"
 # bash — add to ~/.bashrc:
-eval "$(claude-auth completion bash)"
+eval "$(claudex completion bash)"
 ```
 
 ```console
-$ claude-auth switch <TAB>
+$ claudex switch <TAB>
 personal   work
 ```
 
@@ -475,31 +475,31 @@ personal   work
 Health-check the whole setup in one shot.
 
 ```
-claude-auth doctor
+claudex doctor
 ```
 
 ```console
-$ claude-auth doctor
+$ claudex doctor
 
   Doctor   ·   checking your setup
 
   ✓ macOS
   ✓ claude CLI   2.1.187 (Claude Code)
-  ✓ claude-auth on PATH   /Users/you/.local/bin/claude-auth
+  ✓ claudex on PATH   /Users/you/.local/bin/claudex
   ✓ Keychain access   live credential present
   ✓ 2 account(s) saved
   ✓ active account   personal
   ✓ autoswitch   Stop + SessionStart hooks present
 ```
 
-Catches the common gotchas: `claude` not on PATH, missing/partial auto-switch hooks, stale tokens, an active login that isn't saved, and whether a newer `claude-auth` is available.
+Catches the common gotchas: `claude` not on PATH, missing/partial auto-switch hooks, stale tokens, an active login that isn't saved, and whether a newer `claudex` is available.
 
 ### `update`
 
-Update `claude-auth` in place from GitHub — no re-clone.
+Update `claudex` in place from GitHub — no re-clone.
 
 ```
-claude-auth update [--check] [--force]
+claudex update [--check] [--force]
 ```
 
 | Flag | Meaning |
@@ -508,11 +508,11 @@ claude-auth update [--check] [--force]
 | `--force` | Reinstall even if already up to date. |
 
 ```bash
-claude-auth update
-claude-auth update --check
+claudex update
+claudex update --check
 ```
 
-It fetches the latest `bin/claude-auth`, verifies it parses as valid Python, then atomically swaps it over the running file. Your saved accounts (Keychain + `~/.claude-accounts/`) are untouched. If the binary lives somewhere you can't write to, it tells you — re-run `./install.sh` or use `sudo`.
+It fetches the latest `bin/claudex`, verifies it parses as valid Python, then atomically swaps it over the running file. Your saved accounts (Keychain + `~/.claude-accounts/`) are untouched. If the binary lives somewhere you can't write to, it tells you — re-run `./install.sh` or use `sudo`.
 
 ---
 
@@ -523,7 +523,7 @@ It fetches the latest `bin/claude-auth`, verifies it parses as valid Python, the
 Print the grouped cheat sheet of every command in your terminal (a condensed form of this file).
 
 ```
-claude-auth commands
+claudex commands
 ```
 
 ### `--help`, `-h`
@@ -531,8 +531,8 @@ claude-auth commands
 Full help screen — and a little cat walks the width of your terminal in the clay gradient. Purely cosmetic; skipped when piped, disable with `CLAUDE_AUTH_NO_ANIM=1`.
 
 ```
-claude-auth --help
-claude-auth            # no args → help
+claudex --help
+claudex            # no args → help
 ```
 
 ### `--version`, `-V`
@@ -540,7 +540,7 @@ claude-auth            # no args → help
 Print the version.
 
 ```
-claude-auth --version
+claudex --version
 ```
 
 ---

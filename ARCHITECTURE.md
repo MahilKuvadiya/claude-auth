@@ -1,6 +1,6 @@
 # Architecture
 
-This document explains how `claude-auth` works under the hood — the storage model it builds on, the design decisions that make it safe, and the data flow of each command.
+This document explains how `claudex` works under the hood — the storage model it builds on, the design decisions that make it safe, and the data flow of each command.
 
 ## 1. The problem: a login is two things, not one
 
@@ -40,10 +40,10 @@ Claude Code persists a single login across **two** separate locations on macOS:
 
 ## 2. Storage model
 
-`claude-auth` keeps secrets where Claude Code already keeps them — the Keychain — and keeps only non-secret metadata on disk.
+`claudex` keeps secrets where Claude Code already keeps them — the Keychain — and keeps only non-secret metadata on disk.
 
 ```
-                         claude-auth's storage
+                         claudex's storage
 ┌───────────────────────────────────────────────────────────────────┐
 │ macOS Keychain                                                      │
 │                                                                     │
@@ -87,7 +87,7 @@ security add-generic-password -U  -s "Claude Code-credentials" -a <user> -w <blo
 
 The `-U` flag updates an existing Keychain item's data while keeping the item itself — crucially, its **ACL** (access-control list). The ACL records which apps may read the item without a user prompt; the `claude` binary is already trusted on the live item.
 
-If we deleted and recreated the item instead, that trust would be lost and macOS would pop *"claude wants to use your confidential information…"* on every launch. Updating in place avoids this entirely. **The live item is therefore never deleted by `claude-auth`** — only ever updated.
+If we deleted and recreated the item instead, that trust would be lost and macOS would pop *"claude wants to use your confidential information…"* on every launch. Updating in place avoids this entirely. **The live item is therefore never deleted by `claudex`** — only ever updated.
 
 ### 3.2 Auto-sync the outgoing account before switching away
 
@@ -148,7 +148,7 @@ remove: delete Keychain backup, drop index entry
 
 ## 6. Usage tracking
 
-`claude-auth usage` reports each account's rate-limit consumption. The data comes
+`claudex usage` reports each account's rate-limit consumption. The data comes
 from Anthropic's OAuth usage endpoint — the same source Claude Code's
 `/status → Usage` tab uses:
 
@@ -188,7 +188,7 @@ weekly window is highlighted because it's the limit that usually binds.
 
 ## 7. Auto-switch
 
-`claude-auth autoswitch` moves you to a fresher account when the active one's
+`claudex autoswitch` moves you to a fresher account when the active one's
 usage crosses a threshold. The whole design hinges on **when** the check runs.
 
 **The "no active prompt" guarantee.** Switching is driven by a Claude Code
@@ -199,7 +199,7 @@ usage crosses a threshold. The whole design hinges on **when** the check runs.
   "Stop": [
     { "hooks": [
         { "type": "command",
-          "command": "nohup /…/claude-auth autoswitch run --quiet >/dev/null 2>&1 &" }
+          "command": "nohup /…/claudex autoswitch run --quiet >/dev/null 2>&1 &" }
     ] }
   ]
 }
@@ -230,7 +230,7 @@ buys you: when you do hit the wall and restart, you're already on a fresh
 account instead of having to manually find one and switch.
 
 Config lives in the index under `config.autoswitch`; the `Stop` hook is added and
-removed surgically (matched by the `claude-auth … autoswitch` substring) so the
+removed surgically (matched by the `claudex … autoswitch` substring) so the
 rest of `settings.json` is never touched.
 
 ## 8. Token refresh, status line & pre-flight
@@ -251,13 +251,13 @@ account's Keychain backup. Two guard rails:
 
 - **Inactive accounts only.** The active account's credential is owned by Claude
   Code (it refreshes on its own schedule). Rotating it underneath a running
-  session would break that session's next refresh — so `claude-auth` never
+  session would break that session's next refresh — so `claudex` never
   refreshes the active account; it uses the live token as-is.
 - **Lazy + on-demand.** `usage` refreshes an account only when its token actually
-  returns `expired` (401), then retries once. `claude-auth refresh` lets you
+  returns `expired` (401), then retries once. `claudex refresh` lets you
   proactively refresh all inactive backups.
 
-**Status line.** `claude-auth statusline` is network-free: it renders the active
+**Status line.** `claudex statusline` is network-free: it renders the active
 account plus its **cached** weekly % straight from the index, so it's instant on
 every render. When the cache is older than 5 minutes it spawns a *detached*
 `usage --quiet` to refresh in the background — the render never blocks. Output is
@@ -275,7 +275,7 @@ gap. It's throttled like the Stop check, so it usually costs one quick usage cal
 `switch` and `autoswitch` change the credential *on disk*, which a running session never re-reads. `pool` sidesteps that entirely by moving the decision from disk to the network: it runs a local HTTP proxy and points Claude Code at it with `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` (written into the `env` block of `~/.claude/settings.json`).
 
 ```
-  Claude Code ──HTTP──▶ 127.0.0.1:8848 (claude-auth pool serve)
+  Claude Code ──HTTP──▶ 127.0.0.1:8848 (claudex pool serve)
                               │
                               │  pick an account  (failover: active first; balance: round-robin)
                               │  token_for(acct)  → refresh if expiring  (POST /v1/oauth/token)

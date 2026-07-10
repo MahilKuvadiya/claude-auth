@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Remove the claude-auth binary. Your saved accounts (Keychain items and
+# Remove the claudex binary. Your saved accounts (Keychain items and
 # ~/.claude-accounts) are left untouched unless you pass --purge.
 set -euo pipefail
 
-DEST="$HOME/.local/bin/claude-auth"
+DEST="$HOME/.local/bin/claudex"
 PURGE="${1:-}"
 
 if [[ -f "$DEST" ]]; then
   rm -f "$DEST"
   echo "✓ removed $DEST"
 else
-  echo "claude-auth is not installed at $DEST"
+  echo "claudex is not installed at $DEST"
 fi
 
 if [[ "$PURGE" == "--purge" ]]; then

@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="description" content="claudex — animated feature tour: switch, pool, keep-warm, sessions and more, in the CLI's clay-terminal identity.">
+<title>claudex — animated feature tour</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%94%91</text></svg>">
+<style>*{margin:0}html{-webkit-text-size-adjust:100%}img{max-width:100%}</style>
+</head>
+<body>
+<style>
+  :root{
+    --bg:#14110f; --bg-2:#1b1613; --panel:#1e1815; --panel-2:#241d19;
+    --line:#3a2f28; --line-soft:#2a221d;
+    --clay:#cc785c; --clay-lite:#ecaa78; --clay-dark:#96513a;
+    --ink:#ecdfc4; --ink-soft:#cbbfa8; --mute:#8c8c8c;
+    --ok:#7ac08c; --warn:#e4b656; --err:#e26e66; --blue:#8caef4;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Monaco,"Cascadia Code",monospace;
+    --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --maxw:1080px; --r:14px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:
+      radial-gradient(1200px 620px at 78% -8%, rgba(204,120,92,.14), transparent 60%),
+      radial-gradient(900px 520px at 8% 6%, rgba(140,174,244,.06), transparent 55%),
+      var(--bg);
+    color:var(--ink); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; line-height:1.6; overflow-x:hidden;
+  }
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 24px}
+  ::selection{background:rgba(204,120,92,.32); color:#fff}
+  a{color:var(--clay-lite); text-decoration:none} a:hover{color:var(--ink)}
+  :focus-visible{outline:2px solid var(--clay-lite); outline-offset:3px; border-radius:4px}
+  code{font-family:var(--mono)}
+
+  /* hero */
+  header{padding:64px 0 26px; position:relative}
+  .badge{display:inline-flex; align-items:center; gap:8px; font-family:var(--mono);
+    font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--clay-lite);
+    border:1px solid var(--line); background:rgba(204,120,92,.06); padding:6px 12px;
+    border-radius:999px; margin-bottom:24px}
+  .badge .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 10px var(--ok)}
+  .wordmark{font-family:var(--mono); font-size:clamp(6px,1.55vw,15px); line-height:1.04;
+    margin:0; white-space:pre; overflow-x:auto; padding-bottom:6px;
+    background:linear-gradient(100deg,var(--clay) 0%,var(--clay-lite) 58%,#f6cf9e 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 6px 26px rgba(204,120,92,.28));
+    opacity:0; transform:translateY(6px); animation:rise .8s ease .05s forwards}
+  h1.tag{font-family:var(--sans); font-weight:650; letter-spacing:-.02em;
+    font-size:clamp(28px,4.4vw,46px); line-height:1.08; margin:14px 0 0;
+    text-wrap:balance; color:var(--ink)}
+  h1.tag .accent{background:linear-gradient(100deg,var(--clay-lite),var(--clay));
+    -webkit-background-clip:text; background-clip:text; color:transparent}
+  .sub{color:var(--ink-soft); font-size:clamp(15px,1.7vw,18px); max-width:64ch; margin:16px 0 0}
+  .nav{display:flex; flex-wrap:wrap; gap:8px; margin-top:26px}
+  .nav a{font-family:var(--mono); font-size:12.5px; color:var(--ink-soft);
+    border:1px solid var(--line-soft); background:var(--panel); border-radius:8px;
+    padding:6px 11px; transition:border-color .2s, color .2s, background .2s}
+  .nav a:hover{border-color:var(--clay); color:var(--ink); background:rgba(204,120,92,.08)}
+
+  /* terminal */
+  .term{background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1px solid var(--line); border-radius:var(--r);
+    box-shadow:0 24px 60px -30px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.03);
+    overflow:hidden; font-family:var(--mono)}
+  .term .bar{display:flex; align-items:center; gap:8px; padding:11px 14px;
+    background:rgba(0,0,0,.22); border-bottom:1px solid var(--line-soft)}
+  .term .bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .b-r{background:#e26e66}.b-y{background:#e4b656}.b-g{background:#7ac08c}
+  .term .bar .name{margin-left:8px; font-size:12px; color:var(--mute); letter-spacing:.02em}
+  .term .bar .replay{margin-left:auto; font-family:var(--sans); font-size:11px; color:var(--ink-soft);
+    background:transparent; border:1px solid var(--line); border-radius:7px; padding:4px 10px;
+    cursor:pointer; display:inline-flex; gap:6px; align-items:center;
+    transition:border-color .2s, color .2s, background .2s}
+  .term .bar .replay:hover{border-color:var(--clay); color:var(--ink); background:rgba(204,120,92,.08)}
+  .term .body{padding:18px; font-size:13.5px; line-height:1.72; color:var(--ink);
+    min-height:110px; overflow-x:auto}
+  .term .body .ln{white-space:pre; opacity:0}
+  .term .body .ln.show{opacity:1}
+  .cmd{color:var(--ink)} .cmd .p{color:var(--clay)}
+  .muted{color:var(--mute)} .ok{color:var(--ok)} .warn{color:var(--warn)}
+  .err{color:var(--err)} .clay{color:var(--clay-lite)} .blue{color:var(--blue)} .dim{color:var(--ink-soft)}
+
+  /* feature scaffold */
+  .feat{padding:44px 0; border-top:1px solid var(--line-soft)}
+  .feat .grid{display:grid; grid-template-columns:0.82fr 1.18fr; gap:38px; align-items:center}
+  .feat .grid.rev{grid-template-columns:1.18fr 0.82fr}
+  .feat .grid.rev .copy{order:2}
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--clay); display:flex; align-items:center; gap:10px; margin:0 0 12px}
+  .eyebrow::before{content:""; width:22px; height:1px; background:var(--clay); opacity:.6}
+  .feat h2{font-family:var(--sans); font-weight:640; letter-spacing:-.015em;
+    font-size:clamp(21px,2.6vw,29px); margin:0 0 12px; line-height:1.14; text-wrap:balance}
+  .feat p{color:var(--ink-soft); margin:0 0 10px; max-width:46ch}
+  .feat .note{font-family:var(--mono); font-size:12.5px; color:var(--mute); margin-top:14px}
+  .feat .note b{color:var(--clay-lite); font-weight:600}
+
+  /* account rows + moving marker (switch / autoswitch / shared) */
+  .rows{display:flex; flex-direction:column; gap:2px; margin-top:4px; position:relative}
+  .row{display:grid; grid-template-columns:22px 1fr auto; gap:10px; align-items:center;
+    padding:7px 10px; border-radius:8px; font-size:13px; transition:background .35s}
+  .row .who{color:var(--ink)} .row .meta{color:var(--mute); font-size:12px}
+  .row.active{background:rgba(204,120,92,.10)}
+  .row .mark{color:var(--mute); text-align:center; transition:color .3s}
+  .row.active .mark{color:var(--ok)}
+  .selglow{position:absolute; left:4px; right:4px; height:34px; border:1px solid var(--clay);
+    border-radius:9px; background:rgba(204,120,92,.06); top:6px; opacity:0;
+    transition:transform .5s cubic-bezier(.5,.05,.2,1), opacity .3s; pointer-events:none}
+
+  /* usage bars */
+  .ubars{display:flex; flex-direction:column; gap:14px; margin-top:2px}
+  .ubar{display:grid; grid-template-columns:74px 1fr 132px; gap:12px; align-items:center; font-size:12.5px}
+  .ubar .who{color:var(--ink)} .ubar .who small{display:block; color:var(--mute); font-size:11px}
+  .track{height:14px; border-radius:7px; background:rgba(255,255,255,.045);
+    border:1px solid var(--line-soft); overflow:hidden; position:relative}
+  .fill{height:100%; width:0; border-radius:7px 0 0 7px; transition:width 1.15s cubic-bezier(.4,0,.15,1)}
+  .fill.g{background:linear-gradient(90deg,#5fa876,var(--ok))}
+  .fill.y{background:linear-gradient(90deg,#c99b3e,var(--warn))}
+  .fill.r{background:linear-gradient(90deg,#c25852,var(--err))}
+  .ubar .read{font-variant-numeric:tabular-nums; color:var(--ink-soft); text-align:right}
+  .ubar .read .pct{color:var(--ink); font-weight:600}
+  .legend{display:flex; gap:16px; margin-top:16px; font-size:12px; color:var(--mute); font-family:var(--mono)}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+
+  /* pool flow */
+  .pool{display:flex; flex-direction:column; gap:16px; margin-top:2px}
+  .flow{position:relative; display:grid; grid-template-columns:1fr 44px 1fr 44px 1fr; align-items:center}
+  .node{border:1px solid var(--line); background:var(--panel-2); border-radius:10px;
+    padding:12px 10px; text-align:center; font-size:12px; color:var(--ink-soft); position:relative;
+    transition:border-color .3s, box-shadow .3s, background .3s, opacity .3s}
+  .node .t{display:block; color:var(--ink); font-size:12.5px; margin-bottom:2px}
+  .node .s{font-size:11px; color:var(--mute)}
+  .node.hit{border-color:var(--clay); box-shadow:0 0 0 1px var(--clay), 0 0 26px -6px var(--clay)}
+  .node.ok{border-color:var(--ok); box-shadow:0 0 22px -8px var(--ok)} .node.ok .s{color:var(--ok)}
+  .node.bad{border-color:var(--err); box-shadow:0 0 22px -8px var(--err)} .node.bad .s{color:var(--err)}
+  .node.rest{opacity:.55}
+  .accts{display:flex; flex-direction:column; gap:10px}
+  .link{position:relative; height:2px; background:var(--line); align-self:center; width:100%}
+  .packet{position:absolute; width:9px; height:9px; border-radius:50%; background:var(--clay-lite);
+    box-shadow:0 0 12px var(--clay-lite); top:50%; left:0; margin-top:-4px; opacity:0}
+  .poolstatus{font-family:var(--mono); font-size:12.5px; border-top:1px solid var(--line-soft); padding-top:12px}
+  .poolstatus .st{color:var(--mute); min-height:1.6em; transition:color .3s}
+  .tag429{display:inline-block; font-family:var(--mono); font-size:11px; color:var(--err);
+    border:1px solid rgba(226,110,102,.4); border-radius:6px; padding:1px 7px; margin-left:6px; opacity:0}
+  .tag429.on{opacity:1}
+  .tag200{color:var(--ok); border-color:rgba(122,192,140,.4)}
+
+  /* checklist (doctor / refresh) */
+  .checks{display:flex; flex-direction:column; gap:9px; margin-top:6px}
+  .chk{display:grid; grid-template-columns:20px 1fr auto; gap:10px; align-items:center; font-size:13px}
+  .chk .m{color:var(--mute); transition:color .3s}
+  .chk.done .m{color:var(--ok)} .chk.warnst .m{color:var(--warn)}
+  .chk .lbl{color:var(--ink-soft)} .chk.done .lbl{color:var(--ink)}
+  .chk .rt{font-size:11.5px; color:var(--mute)}
+  .chk.done .rt{color:var(--ok)} .chk.warnst .rt{color:var(--warn)}
+  .spin{display:inline-block; width:12px; height:12px; border:2px solid var(--line);
+    border-top-color:var(--clay-lite); border-radius:50%; animation:sp .7s linear infinite}
+  .summ{font-family:var(--mono); font-size:12.5px; margin-top:14px; padding-top:12px;
+    border-top:1px solid var(--line-soft); color:var(--mute); opacity:0}
+  .summ.show{opacity:1}
+
+  /* statusline widget */
+  .slwidget{display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+    padding:12px 14px; font-family:var(--mono); font-size:12.5px; margin-top:4px}
+  .slwidget .acct{color:var(--clay-lite)} .slwidget .sep{color:var(--line)}
+  .slwidget .tier{color:var(--ink-soft)}
+  .minibar{display:inline-flex; align-items:center; gap:7px; color:var(--mute)}
+  .minitrack{width:66px; height:9px; border-radius:5px; background:rgba(255,255,255,.05);
+    border:1px solid var(--line-soft); overflow:hidden}
+  .minifill{height:100%; width:0; transition:width 1s cubic-bezier(.4,0,.15,1)}
+  .minibar .v{color:var(--ink); font-variant-numeric:tabular-nums}
+
+  /* session two-up */
+  .twoup{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:2px}
+  .miniwin{border:1px solid var(--line-soft); border-radius:10px; background:var(--panel-2); overflow:hidden;
+    transition:border-color .4s, box-shadow .4s, opacity .4s}
+  .miniwin .hd{font-size:11px; color:var(--mute); padding:8px 11px; border-bottom:1px solid var(--line-soft);
+    display:flex; align-items:center; gap:7px}
+  .miniwin .hd b{color:var(--ink-soft); font-weight:600}
+  .miniwin .bd{padding:11px; font-size:12px; color:var(--ink-soft); min-height:70px}
+  .miniwin.lit{border-color:var(--clay); box-shadow:0 0 26px -8px var(--clay)}
+  .miniwin .who{color:var(--clay-lite)}
+  .pinbadge{display:inline-block;font-size:10.5px;color:var(--clay-lite);border:1px solid rgba(204,120,92,.4);
+    border-radius:5px;padding:0 6px;margin-left:auto;opacity:0;transition:opacity .4s}
+  .miniwin.lit .pinbadge{opacity:1}
+
+  /* keep-warm lanes */
+  .kwlanes{display:flex; flex-direction:column; gap:16px}
+  .kwlane{position:relative}
+  .kwlabel{display:flex; justify-content:space-between; align-items:baseline; font-size:12px; margin-bottom:5px}
+  .kwstate{font-family:var(--mono); font-size:11.5px}
+  .kwping{position:absolute; right:2px; top:-3px; font-family:var(--mono); font-size:11px;
+    color:var(--clay-lite); opacity:0; transition:opacity .25s}
+  .kwping.on{opacity:1}
+
+  /* update version pill */
+  .verrow{display:flex; align-items:center; gap:12px; margin-top:4px; font-family:var(--mono); font-size:13px; flex-wrap:wrap}
+  .verpill{border:1px solid var(--line); border-radius:8px; padding:5px 11px; color:var(--ink-soft);
+    background:var(--panel-2); transition:border-color .4s, color .4s}
+  .verpill.new{border-color:var(--ok); color:var(--ok)}
+  .arrow{color:var(--mute)}
+
+  /* reference cards */
+  .more{padding:46px 0 8px; border-top:1px solid var(--line-soft)}
+  .more h3{font-family:var(--sans); font-weight:600; font-size:14px; letter-spacing:.02em;
+    color:var(--mute); text-transform:uppercase; margin:0 0 20px}
+  .cards{display:grid; grid-template-columns:repeat(4,1fr); gap:14px}
+  .card{border:1px solid var(--line-soft); background:var(--panel); border-radius:12px; padding:16px}
+  .card .k{font-family:var(--mono); color:var(--clay-lite); font-size:12.5px; margin-bottom:8px}
+  .card .h{font-family:var(--sans); font-weight:600; color:var(--ink); margin:0 0 5px; font-size:14.5px}
+  .card p{color:var(--ink-soft); font-size:13px; margin:0}
+
+  footer{padding:42px 0 60px; border-top:1px solid var(--line-soft); margin-top:40px;
+    display:flex; flex-wrap:wrap; gap:16px 26px; align-items:center; justify-content:space-between}
+  footer .ml{font-family:var(--mono); color:var(--mute); font-size:12.5px}
+  footer .ml b{color:var(--clay-lite)}
+  .install{font-family:var(--mono); font-size:13px; background:var(--panel-2); border:1px solid var(--line);
+    border-radius:9px; padding:10px 14px; color:var(--ink); display:inline-flex; gap:10px; align-items:center}
+  .install .p{color:var(--clay)}
+
+  .reveal{opacity:0; transform:translateY(14px); transition:opacity .6s ease, transform .6s ease}
+  .reveal.in{opacity:1; transform:none}
+
+  @keyframes rise{to{opacity:1; transform:none}}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  @media (max-width:820px){
+    .feat .grid,.feat .grid.rev{grid-template-columns:1fr; gap:22px}
+    .feat .grid.rev .copy{order:0}
+    .cards{grid-template-columns:1fr 1fr}
+    .flow{grid-template-columns:1fr 26px 1fr 26px 1fr}
+    .node{padding:10px 6px; font-size:11px}
+    .twoup{grid-template-columns:1fr}
+  }
+  @media (max-width:520px){ .cards{grid-template-columns:1fr} }
+  @media (prefers-reduced-motion:reduce){
+    *{animation-duration:.001s !important; transition-duration:.001s !important}
+    .wordmark{opacity:1; transform:none} .spin{display:none}
+  }
+</style>
+
+<div class="wrap">
+
+  <!-- HERO -->
+  <header>
+    <span class="badge"><span class="dot"></span> zero-dependency · macOS · v1.11</span>
+<pre class="wordmark"> ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗
+██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝
+██║     ██║     ███████║██║   ██║██║  ██║█████╗
+██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝
+╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗
+ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝</pre>
+    <h1 class="tag">Every Claude Code account, <span class="accent">one&nbsp;CLI</span>.</h1>
+    <p class="sub">Save every login, switch instantly, watch each account's rate limit, pin a session, pool them behind an auto-failover proxy — even share a pool with friends. Tokens never leave your Keychain.</p>
+    <nav class="nav">
+      <a href="#accounts">accounts</a><a href="#switch">switch</a><a href="#usage">usage</a>
+      <a href="#autoswitch">autoswitch</a><a href="#pool">pool</a><a href="#shared">shared pool</a>
+      <a href="#session">session</a><a href="#keepwarm">keep-warm</a><a href="#refresh">refresh</a><a href="#statusline">statusline</a>
+      <a href="#doctor">doctor</a><a href="#update">update</a><a href="#more">more</a>
+    </nav>
+  </header>
+
+  <!-- ACCOUNTS: login / add / list / current -->
+  <section class="feat reveal" id="accounts">
+    <div class="grid">
+      <div class="copy">
+        <p class="eyebrow">login · add · list · current</p>
+        <h2>Save each account once.</h2>
+        <p><code>add</code> saves whoever you're logged in as; <code>login</code> drives the real browser flow and saves the result under a name. <code>list</code> shows them all, <code>current</code> the active one.</p>
+        <p class="note">names default to the email prefix — <b>no token pasting</b>, ever.</p>
+      </div>
+      <div class="term" data-demo="accounts">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex add · login · list</span>
+          <button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex add personal</div>
+          <div class="ln ok">&nbsp;&nbsp;✓ Saved <span class="clay">personal</span> · vishal@gmail.com</div>
+          <div class="ln cmd" style="margin-top:8px"><span class="p">$</span> claudex login work <span class="dim"># opens browser…</span></div>
+          <div class="ln ok">&nbsp;&nbsp;✓ Signed in &amp; saved <span class="clay">work</span> · vishal@company.com</div>
+          <div class="ln cmd" style="margin-top:8px"><span class="p">$</span> claudex list</div>
+          <div class="rows" style="margin-top:8px">
+            <div class="row lc" data-lc="0"><span class="mark">●</span><span class="who">personal <span class="meta">vishal@gmail.com</span></span><span class="meta">Max 5x</span></div>
+            <div class="row lc" data-lc="1"><span class="mark">○</span><span class="who">work <span class="meta">vishal@company.com · Acme</span></span><span class="meta">Team</span></div>
+            <div class="row lc" data-lc="2"><span class="mark">○</span><span class="who">client <span class="meta">vishal@studio.io · StudioX</span></span><span class="meta">Max 20x</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SWITCH -->
+  <section class="feat reveal" id="switch">
+    <div class="grid rev">
+      <div class="term" data-demo="switch">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex switch</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex switch work</div>
+          <div class="rows" style="margin-top:12px">
+            <div class="selglow" data-glow></div>
+            <div class="row active" data-row="personal"><span class="mark">●</span>
+              <span class="who">personal <span class="meta">vishal@gmail.com</span></span><span class="meta">Max 5x</span></div>
+            <div class="row" data-row="work"><span class="mark">○</span>
+              <span class="who">work <span class="meta">vishal@company.com · Acme</span></span><span class="meta">Team</span></div>
+          </div>
+          <div class="ln ok" style="margin-top:12px">&nbsp;&nbsp;✓ Switched to <span class="clay">work</span> · vishal@company.com</div>
+          <div class="ln muted">&nbsp;&nbsp;↻ restart Claude Code to use this account</div>
+        </div>
+      </div>
+      <div class="copy">
+        <p class="eyebrow">switch</p>
+        <h2>Flip accounts in one command.</h2>
+        <p>A login is two things — the token in your Keychain and the identity in <code>~/.claude.json</code>. <code>claudex</code> swaps <em>both</em>, atomically, so the app never gets confused about who it is.</p>
+        <p class="note">watch the <b>active dot</b> jump — no logout, no browser.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- USAGE -->
+  <section class="feat reveal" id="usage">
+    <div class="grid">
+      <div class="copy">
+        <p class="eyebrow">usage</p>
+        <h2>See every limit before you hit one.</h2>
+        <p>Pulls live rate-limit data for <em>all</em> accounts at once — no switching — from the same endpoint Claude Code's Usage tab reads. The tier tells you which account carries the bigger ceiling.</p>
+        <p class="note">bars fill by severity: <b>green → amber → red</b>.</p>
+      </div>
+      <div class="term" data-demo="usage">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex usage</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex usage</div>
+          <div class="ln dim" style="margin:10px 0 4px">&nbsp;&nbsp;Usage&nbsp;&nbsp;·&nbsp;&nbsp;the weekly limit is the one that bites</div>
+          <div class="ubars">
+            <div class="ubar"><span class="who">personal<small>Max 5x</small></span>
+              <div class="track"><div class="fill g" data-pct="24"></div></div>
+              <span class="read">week <span class="pct" data-count="24">0</span>% · <span class="dim">Fri</span></span></div>
+            <div class="ubar"><span class="who">work<small>Team</small></span>
+              <div class="track"><div class="fill y" data-pct="57"></div></div>
+              <span class="read">week <span class="pct" data-count="57">0</span>% · <span class="dim">Wed</span></span></div>
+            <div class="ubar"><span class="who">client<small>Max 20x</small></span>
+              <div class="track"><div class="fill r" data-pct="88"></div></div>
+              <span class="read">week <span class="pct" data-count="88">0</span>% · <span class="dim">Mon</span></span></div>
+          </div>
+          <div class="legend"><span><i style="background:var(--ok)"></i>&lt;50%</span><span><i style="background:var(--warn)"></i>&lt;80%</span><span><i style="background:var(--err)"></i>≥80%</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AUTOSWITCH -->
+  <section class="feat reveal" id="autoswitch">
+    <div class="grid rev">
+      <div class="term" data-demo="autoswitch">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex autoswitch</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex autoswitch on <span class="dim">--threshold 90</span></div>
+          <div class="ln ok">&nbsp;&nbsp;✓ watching · switches when usage &gt; 90% (when idle)</div>
+          <div class="ubar" style="margin:14px 0 6px"><span class="who">personal<small>active</small></span>
+            <div class="track"><div class="fill g" data-auto="fill"></div></div>
+            <span class="read"><span class="pct" data-auto="pct">0</span>% <span class="dim">session</span></span></div>
+          <div class="ln" data-auto="trigger" style="opacity:0"><span class="warn">&nbsp;&nbsp;! 92% &gt; 90% — hopping to a fresher account…</span></div>
+          <div class="rows" style="margin-top:8px">
+            <div class="selglow" data-glow></div>
+            <div class="row active" data-row="personal"><span class="mark">●</span><span class="who">personal</span><span class="meta">92%</span></div>
+            <div class="row" data-row="work"><span class="mark">○</span><span class="who">work</span><span class="meta">57%</span></div>
+          </div>
+          <div class="ln ok" data-auto="done" style="opacity:0;margin-top:10px">&nbsp;&nbsp;✓ auto-switched to <span class="clay">work</span></div>
+        </div>
+      </div>
+      <div class="copy">
+        <p class="eyebrow">autoswitch</p>
+        <h2>Let it hop for you.</h2>
+        <p>Hooks watch your usage in the background and switch to a fresher account the moment you cross your threshold — but only when you're idle, so it never interrupts a turn.</p>
+        <p class="note">round-robin or <b>most-headroom</b> strategy, your call.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- POOL (failover) -->
+  <section class="feat reveal" id="pool">
+    <div class="grid">
+      <div class="copy">
+        <p class="eyebrow">pool</p>
+        <h2>Hit a rate limit? Keep going.</h2>
+        <p>Point Claude Code at one local proxy. Every request flows through your active account — and the instant it hits <span class="err">429</span>, the proxy retries the <em>same</em> request on another. Mid-conversation. No restart.</p>
+        <p class="note">stateless API → <b>any account can serve any turn</b>. ↓</p>
+      </div>
+      <div class="term" data-demo="pool">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex pool · failover</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="pool">
+            <div class="flow">
+              <div class="node" data-n="cc"><span class="t">Claude Code</span><span class="s">one session</span></div>
+              <div class="link" data-l="1"><span class="packet" data-packet></span></div>
+              <div class="node" data-n="proxy"><span class="t">proxy</span><span class="s">127.0.0.1:8848</span></div>
+              <div class="link" data-l="2"></div>
+              <div class="accts">
+                <div class="node" data-n="A"><span class="t">personal</span><span class="s" data-s="A">ready</span><span class="tag429" data-tag="A">429</span></div>
+                <div class="node" data-n="B"><span class="t">work</span><span class="s" data-s="B">ready</span><span class="tag429 tag200" data-tag="B">200</span></div>
+              </div>
+            </div>
+            <div class="poolstatus">
+              <div class="ln cmd"><span class="p">$</span> claudex pool start <span class="dim">--mode failover</span></div>
+              <div class="st" data-st>● running · 127.0.0.1:8848 · mode failover</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SHARED POOL -->
+  <section class="feat reveal" id="shared">
+    <div class="grid rev">
+      <div class="term" data-demo="shared">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex pool · shared</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex pool join <span class="dim">clpool:v1:…</span></div>
+          <div class="ln ok">&nbsp;&nbsp;✓ joined · 3 members · your token is shared (encrypted)</div>
+          <div class="ln cmd" style="margin-top:8px"><span class="p">$</span> claudex pool use work</div>
+          <div class="rows" style="margin-top:8px">
+            <div class="selglow" data-glow></div>
+            <div class="row active" data-row="you"><span class="mark">▶</span><span class="who">vishal <span class="meta">personal</span></span><span class="meta">42% used</span></div>
+            <div class="row" data-row="work"><span class="mark">&nbsp;</span><span class="who">mahil <span class="meta">work</span></span><span class="meta">12% used</span></div>
+            <div class="row" data-row="c"><span class="mark">&nbsp;</span><span class="who">kenil <span class="meta">client</span></span><span class="meta">70% used</span></div>
+          </div>
+          <div class="ln ok" style="margin-top:10px">&nbsp;&nbsp;✓ now served by <span class="clay">mahil</span> · live, no restart</div>
+        </div>
+      </div>
+      <div class="copy">
+        <p class="eyebrow">pool join · use · members</p>
+        <h2>Pool with friends — no server.</h2>
+        <p>Everyone's token lives encrypted in one free JSON blob; each person runs the same local proxy. Pick whose account serves you and switch live — running sessions follow on their next request.</p>
+        <p class="note">client-side encrypted · <b>tokens never touch a server in the clear</b>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SESSION -->
+  <section class="feat reveal" id="session">
+    <div class="grid">
+      <div class="copy">
+        <p class="eyebrow">session</p>
+        <h2>Pin one window to one account.</h2>
+        <p>Run a single Claude Code session as a chosen account while your global login — and every other window — stays exactly as it is. It spins up a private proxy for just that process.</p>
+        <p class="note">nothing global is touched — <b>Keychain untouched</b>.</p>
+      </div>
+      <div class="term" data-demo="session">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex session</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex session client -- -p "audit"</div>
+          <div class="twoup" style="margin-top:12px">
+            <div class="miniwin" data-win="global"><div class="hd"><b>other windows</b></div>
+              <div class="bd">logged in as <span class="who">personal</span><br><span class="dim">unchanged ✓</span></div></div>
+            <div class="miniwin" data-win="pinned"><div class="hd"><b>this session</b><span class="pinbadge">pinned</span></div>
+              <div class="bd">running as <span class="who">client</span><br><span class="dim">private proxy · ephemeral</span></div></div>
+          </div>
+          <div class="ln ok" data-sess="done" style="opacity:0;margin-top:12px">&nbsp;&nbsp;✓ pinned to <span class="clay">client</span> · global login unchanged</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- KEEP-WARM (+ sessions) -->
+  <section class="feat reveal" id="keepwarm">
+    <div class="grid rev">
+      <div class="term" data-demo="keepwarm">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex sessions · keep-warm</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex sessions</div>
+          <div class="rows" style="margin-top:8px">
+            <div class="row lc"><span class="mark">●</span><span class="who">ai-chatbot <span class="meta">develop · 375k</span></span><span class="meta">2m ago</span></div>
+            <div class="row lc"><span class="mark">&nbsp;</span><span class="who">shru <span class="meta">main · 705k</span></span><span class="meta">17m ago</span></div>
+          </div>
+          <div class="ln cmd" style="margin-top:8px"><span class="p">$</span> claudex keep-warm add ai-chatbot</div>
+          <div class="kwlanes" style="margin-top:14px">
+            <div class="kwlane">
+              <div class="kwlabel"><span class="dim">without keep-warm</span><span class="kwstate" data-kw="cold-st"></span></div>
+              <div class="track"><div class="fill g" data-kw="cold" style="width:100%"></div></div>
+            </div>
+            <div class="kwlane">
+              <div class="kwlabel"><span class="clay">keep-warm on</span><span class="kwstate" data-kw="warm-st"></span></div>
+              <div class="track"><div class="fill g" data-kw="warm" style="width:100%"></div></div>
+              <div class="kwping" data-kw="ping">⚡ ping · cache read</div>
+            </div>
+          </div>
+          <div class="ln" data-kw="clock" style="opacity:0;margin-top:10px">&nbsp;&nbsp;<span class="dim">idle </span><span class="clay" data-kw="min">0</span><span class="dim">m · 1-hour cache TTL</span></div>
+        </div>
+      </div>
+      <div class="copy">
+        <p class="eyebrow">sessions · keep-warm</p>
+        <h2>Step away for an hour — come back cheap.</h2>
+        <p>Claude Code's cache lasts ~1 hour idle; leave a session longer and the next turn re-sends the whole conversation at full price. <code>keep-warm</code> replays a chosen session as a cheap cache read every ~50 min, so its cache never goes cold.</p>
+        <p class="note">find it with <b>sessions</b>, warm it by id or project · <b>~0.1× the context</b> per ping.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- REFRESH -->
+  <section class="feat reveal" id="refresh">
+    <div class="grid rev">
+      <div class="term" data-demo="refresh">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex refresh</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex refresh</div>
+          <div class="checks" style="margin-top:10px">
+            <div class="chk" data-rf><span class="m"><span class="spin"></span></span><span class="lbl">personal</span><span class="rt">refreshing…</span></div>
+            <div class="chk" data-rf><span class="m"><span class="spin"></span></span><span class="lbl">work</span><span class="rt">refreshing…</span></div>
+            <div class="chk" data-rf><span class="m"><span class="spin"></span></span><span class="lbl">client</span><span class="rt">refreshing…</span></div>
+          </div>
+          <div class="summ" data-summ>&nbsp;✓ 3 tokens refreshed · stored back in the Keychain</div>
+        </div>
+      </div>
+      <div class="copy">
+        <p class="eyebrow">refresh</p>
+        <h2>Keep every token warm.</h2>
+        <p>Short-lived access tokens expire fast. <code>refresh</code> renews the stored copy of your inactive accounts so <code>usage</code> stays live and a switch never lands on a stale token.</p>
+        <p class="note">also runs automatically before you leave an account.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATUSLINE -->
+  <section class="feat reveal" id="statusline">
+    <div class="grid">
+      <div class="copy">
+        <p class="eyebrow">statusline</p>
+        <h2>Your account, always in view.</h2>
+        <p>Drop a compact live line into Claude Code's status bar: which account is active, its tier, and how much of the session and weekly limits are left — refreshed in the background.</p>
+        <p class="note">one line, always current.</p>
+      </div>
+      <div class="term" data-demo="statusline">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex statusline</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex statusline</div>
+          <div class="slwidget" style="margin-top:10px">
+            <span class="acct">⛁ personal</span><span class="sep">│</span><span class="tier">Max 5x</span><span class="sep">│</span>
+            <span class="minibar">S<span class="minitrack"><span class="minifill g" data-sl="23"></span></span><span class="v" data-slv="23">0</span>%</span>
+            <span class="minibar">W<span class="minitrack"><span class="minifill g" data-sl="24"></span></span><span class="v" data-slv="24">0</span>%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DOCTOR -->
+  <section class="feat reveal" id="doctor">
+    <div class="grid rev">
+      <div class="term" data-demo="doctor">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex doctor</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex doctor</div>
+          <div class="checks" style="margin-top:10px">
+            <div class="chk" data-dc><span class="m">○</span><span class="lbl">Keychain reachable</span><span class="rt">ok</span></div>
+            <div class="chk" data-dc><span class="m">○</span><span class="lbl">live credential present</span><span class="rt">ok</span></div>
+            <div class="chk" data-dc><span class="m">○</span><span class="lbl">3 accounts saved</span><span class="rt">ok</span></div>
+            <div class="chk" data-dc><span class="m">○</span><span class="lbl">tokens valid</span><span class="rt">ok</span></div>
+            <div class="chk" data-dc data-kind="warn"><span class="m">○</span><span class="lbl">shell completion</span><span class="rt">not installed</span></div>
+          </div>
+          <div class="summ" data-summ>&nbsp;● 4 ok · 1 warning · <span class="dim">v1.10 (up to date)</span></div>
+        </div>
+      </div>
+      <div class="copy">
+        <p class="eyebrow">doctor</p>
+        <h2>One command, full health check.</h2>
+        <p>Verifies the Keychain, your live credential, every saved token, hooks, and whether a newer version is out — then tells you exactly what to fix if anything's off.</p>
+        <p class="note">green means go.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- UPDATE -->
+  <section class="feat reveal" id="update">
+    <div class="grid">
+      <div class="copy">
+        <p class="eyebrow">update</p>
+        <h2>Updates itself, safely.</h2>
+        <p>Pulls the latest version from GitHub, verifies it parses as valid Python, then atomically swaps it over the running file. Your saved accounts live elsewhere, untouched.</p>
+        <p class="note"><b>--check</b> just tells you if there's something new.</p>
+      </div>
+      <div class="term" data-demo="update">
+        <div class="bar"><i class="b-r"></i><i class="b-y"></i><i class="b-g"></i>
+          <span class="name">claudex update</span><button class="replay" data-replay>↻ replay</button></div>
+        <div class="body">
+          <div class="ln cmd"><span class="p">$</span> claudex update --check</div>
+          <div class="ln" data-up="check" style="opacity:0"><span class="muted">&nbsp;&nbsp;checking github…</span></div>
+          <div class="verrow" data-up="row" style="opacity:0;margin:10px 0">
+            <span class="verpill" data-up="cur">v1.10</span><span class="arrow">→</span>
+            <span class="verpill" data-up="next">v1.11</span>
+            <span class="warn" data-up="avail" style="opacity:0">update available</span>
+          </div>
+          <div class="ln cmd" data-up="cmd2" style="opacity:0"><span class="p">$</span> claudex update</div>
+          <div class="ln ok" data-up="done" style="opacity:0">&nbsp;&nbsp;✓ Updated v1.10 → v1.11 · accounts untouched</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MORE / reference -->
+  <section class="more reveal" id="more">
+    <h3>the rest of the toolbox</h3>
+    <div class="cards">
+      <div class="card"><div class="k">rename &lt;old&gt; &lt;new&gt;</div><p class="h">Rename</p><p>Give a saved profile a clearer name, any time.</p></div>
+      <div class="card"><div class="k">remove &lt;name&gt;</div><p class="h">Remove</p><p>Delete a profile and its Keychain backup. <code>rm</code> for short.</p></div>
+      <div class="card"><div class="k">completion bash|zsh</div><p class="h">Completion</p><p>Tab-complete commands and your account names.</p></div>
+      <div class="card"><div class="k">commands</div><p class="h">Cheat sheet</p><p>Every command and flag, one screen.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="ml">tokens stay encrypted in the macOS Keychain · <b>zero</b> pip installs · one Python file</div>
+    <span class="install"><span class="p">$</span> git clone github.com/vishalmakwana111/claudex &amp;&amp; ./install.sh</span>
+  </footer>
+
+</div>
+
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion:reduce)').matches;
+  const sleep = ms => new Promise(r => setTimeout(r, reduce ? 0 : ms));
+
+  const revObs = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) e.target.classList.add('in'); }), {threshold:.14});
+  document.querySelectorAll('.reveal').forEach(el => revObs.observe(el));
+
+  const show = el => el && el.classList.add('show');
+  const op = (el,v)=> el && (el.style.opacity=v);
+  async function seq(list, gap=320){ for (const el of list){ show(el); await sleep(gap); } }
+
+  function countUp(el, to, ms=1000){
+    if (reduce){ el.textContent = to; return; }
+    const s = performance.now();
+    (function step(t){ const p=Math.min(1,(t-s)/ms), e=1-Math.pow(1-p,3);
+      el.textContent=Math.round(to*e); if(p<1) requestAnimationFrame(step); })(s);
+  }
+
+  const D = {
+    async accounts(t){
+      const lns=[...t.querySelectorAll('.ln')], rows=[...t.querySelectorAll('.lc')];
+      lns.forEach(l=>l.classList.remove('show')); rows.forEach(r=>{r.style.opacity=0;r.style.transform='translateY(6px)';r.style.transition='opacity .4s,transform .4s';});
+      await sleep(160);
+      show(lns[0]); await sleep(420); show(lns[1]); await sleep(560);
+      show(lns[2]); await sleep(360); show(lns[3]); await sleep(620);
+      show(lns[4]); await sleep(360);
+      for (const r of rows){ r.style.opacity=1; r.style.transform='none'; await sleep(300); }
+    },
+
+    async switch(t){
+      const cmd=t.querySelector('.ln.cmd'), glow=t.querySelector('[data-glow]');
+      const rP=t.querySelector('[data-row="personal"]'), rW=t.querySelector('[data-row="work"]');
+      const outs=[...t.querySelectorAll('.ln.ok, .ln.muted')];
+      cmd.classList.remove('show'); outs.forEach(l=>l.classList.remove('show'));
+      rP.classList.add('active'); rW.classList.remove('active');
+      rP.querySelector('.mark').textContent='●'; rW.querySelector('.mark').textContent='○';
+      glow.style.opacity=0; glow.style.transform='translateY(0)';
+      await sleep(200); show(cmd); await sleep(650);
+      glow.style.opacity=1; glow.style.transform='translateY(38px)'; await sleep(320);
+      rP.classList.remove('active'); rP.querySelector('.mark').textContent='○';
+      rW.classList.add('active'); rW.querySelector('.mark').textContent='●'; await sleep(520);
+      glow.style.opacity=0; await seq(outs,360);
+    },
+
+    async usage(t){
+      const lns=[...t.querySelectorAll('.ln')], fills=[...t.querySelectorAll('.fill')], cs=[...t.querySelectorAll('[data-count]')];
+      lns.forEach(l=>l.classList.remove('show')); fills.forEach(f=>f.style.width='0'); cs.forEach(c=>c.textContent='0');
+      await sleep(160); await seq(lns,260); await sleep(120);
+      fills.forEach((f,i)=>setTimeout(()=>f.style.width=f.dataset.pct+'%',i*180));
+      cs.forEach((c,i)=>setTimeout(()=>countUp(c,+c.dataset.count,1100),i*180));
+    },
+
+    async autoswitch(t){
+      const lns=[...t.querySelectorAll('.ln.cmd, .ln.ok')].slice(0,2);
+      const fill=t.querySelector('[data-auto="fill"]'), pct=t.querySelector('[data-auto="pct"]');
+      const trig=t.querySelector('[data-auto="trigger"]'), done=t.querySelector('[data-auto="done"]');
+      const glow=t.querySelector('[data-glow]'), rP=t.querySelector('[data-row="personal"]'), rW=t.querySelector('[data-row="work"]');
+      lns.forEach(l=>l.classList.remove('show')); op(trig,0); op(done,0);
+      fill.className='fill g'; fill.style.width='0'; pct.textContent='0';
+      rP.classList.add('active'); rW.classList.remove('active');
+      rP.querySelector('.mark').textContent='●'; rW.querySelector('.mark').textContent='○';
+      glow.style.opacity=0; glow.style.transform='translateY(0)';
+      await sleep(160); await seq(lns,340); await sleep(200);
+      fill.style.width='92%'; fill.className='fill r'; countUp(pct,92,1300); await sleep(1350);
+      op(trig,1); await sleep(700);
+      glow.style.opacity=1; glow.style.transform='translateY(38px)'; await sleep(320);
+      rP.classList.remove('active'); rP.querySelector('.mark').textContent='○';
+      rW.classList.add('active'); rW.querySelector('.mark').textContent='●'; await sleep(420);
+      glow.style.opacity=0; op(done,1);
+    },
+
+    async pool(t){
+      const packet=t.querySelector('[data-packet]'), l1=t.querySelector('[data-l="1"]');
+      const nCC=t.querySelector('[data-n="cc"]'), nP=t.querySelector('[data-n="proxy"]');
+      const nA=t.querySelector('[data-n="A"]'), nB=t.querySelector('[data-n="B"]');
+      const sA=t.querySelector('[data-s="A"]'), sB=t.querySelector('[data-s="B"]');
+      const tA=t.querySelector('[data-tag="A"]'), tB=t.querySelector('[data-tag="B"]');
+      const st=t.querySelector('[data-st]'), cmd=t.querySelector('.ln.cmd');
+      [nCC,nP,nA,nB].forEach(n=>n.classList.remove('hit','ok','bad','rest'));
+      tA.classList.remove('on'); tB.classList.remove('on'); sA.textContent='ready'; sB.textContent='ready';
+      packet.style.opacity=0; cmd.classList.remove('show'); st.textContent='● running · 127.0.0.1:8848 · mode failover';
+      await sleep(200); show(cmd); await sleep(600);
+      st.textContent='→ request in · trying personal'; nCC.classList.add('hit');
+      packet.style.transition='none'; packet.style.left='0'; packet.style.opacity='1';
+      await sleep(60); packet.style.transition='left .6s ease'; packet.style.left='100%';
+      await sleep(620); nP.classList.add('hit'); nA.classList.add('hit'); await sleep(560);
+      nA.classList.remove('hit'); nA.classList.add('bad','rest'); sA.textContent='resting 24s'; tA.classList.add('on');
+      st.innerHTML='<span class="err">✗ personal hit 429</span> · failing over…'; await sleep(900);
+      nB.classList.add('hit'); await sleep(560);
+      nB.classList.remove('hit'); nB.classList.add('ok'); sB.textContent='served ✓'; tB.classList.add('on');
+      packet.style.left='0'; st.innerHTML='<span class="ok">✓ served by work</span> · same request, no restart';
+      nP.classList.remove('hit'); await sleep(700); packet.style.opacity='0';
+    },
+
+    async shared(t){
+      const lns=[...t.querySelectorAll('.ln')], glow=t.querySelector('[data-glow]');
+      const rY=t.querySelector('[data-row="you"]'), rW=t.querySelector('[data-row="work"]');
+      lns.forEach(l=>l.classList.remove('show'));
+      rY.classList.add('active'); rW.classList.remove('active');
+      rY.querySelector('.mark').textContent='▶'; rW.querySelector('.mark').innerHTML='&nbsp;';
+      glow.style.opacity=0; glow.style.transform='translateY(0)';
+      await sleep(160); show(lns[0]); await sleep(360); show(lns[1]); await sleep(560);
+      show(lns[2]); await sleep(560);
+      glow.style.opacity=1; glow.style.transform='translateY(38px)'; await sleep(340);
+      rY.classList.remove('active'); rY.querySelector('.mark').innerHTML='&nbsp;';
+      rW.classList.add('active'); rW.querySelector('.mark').textContent='▶'; await sleep(480);
+      glow.style.opacity=0; show(lns[3]);
+    },
+
+    async session(t){
+      const cmd=t.querySelector('.ln.cmd'), done=t.querySelector('[data-sess="done"]');
+      const g=t.querySelector('[data-win="global"]'), p=t.querySelector('[data-win="pinned"]');
+      cmd.classList.remove('show'); op(done,0); p.classList.remove('lit');
+      await sleep(200); show(cmd); await sleep(700);
+      p.classList.add('lit'); await sleep(800); op(done,1);
+    },
+
+    async refresh(t){
+      const cmd=t.querySelector('.ln.cmd'), chks=[...t.querySelectorAll('[data-rf]')], summ=t.querySelector('[data-summ]');
+      cmd.classList.remove('show'); summ.classList.remove('show');
+      chks.forEach(c=>{c.classList.remove('done'); c.querySelector('.m').innerHTML='<span class="spin"></span>'; c.querySelector('.rt').textContent='refreshing…';});
+      await sleep(200); show(cmd); await sleep(500);
+      for (const c of chks){ await sleep(650); c.classList.add('done'); c.querySelector('.m').textContent='✓'; c.querySelector('.rt').textContent='refreshed'; }
+      await sleep(300); summ.classList.add('show');
+    },
+
+    async statusline(t){
+      const cmd=t.querySelector('.ln.cmd'), fills=[...t.querySelectorAll('[data-sl]')], vs=[...t.querySelectorAll('[data-slv]')];
+      cmd.classList.remove('show'); fills.forEach(f=>f.style.width='0'); vs.forEach(v=>v.textContent='0');
+      await sleep(200); show(cmd); await sleep(500);
+      fills.forEach((f,i)=>setTimeout(()=>f.style.width=f.dataset.sl+'%',i*220));
+      vs.forEach((v,i)=>setTimeout(()=>countUp(v,+v.dataset.slv,900),i*220));
+    },
+
+    async doctor(t){
+      const cmd=t.querySelector('.ln.cmd'), chks=[...t.querySelectorAll('[data-dc]')], summ=t.querySelector('[data-summ]');
+      cmd.classList.remove('show'); summ.classList.remove('show');
+      chks.forEach(c=>{c.classList.remove('done','warnst'); c.querySelector('.m').textContent='○';});
+      await sleep(200); show(cmd); await sleep(500);
+      for (const c of chks){ await sleep(420);
+        if (c.dataset.kind==='warn'){ c.classList.add('warnst'); c.querySelector('.m').textContent='!'; }
+        else { c.classList.add('done'); c.querySelector('.m').textContent='✓'; } }
+      await sleep(300); summ.classList.add('show');
+    },
+
+    async update(t){
+      const cmd=t.querySelector('.ln.cmd'), check=t.querySelector('[data-up="check"]'), row=t.querySelector('[data-up="row"]');
+      const next=t.querySelector('[data-up="next"]'), avail=t.querySelector('[data-up="avail"]');
+      const cmd2=t.querySelector('[data-up="cmd2"]'), done=t.querySelector('[data-up="done"]');
+      cmd.classList.remove('show'); [check,row,cmd2,done,avail].forEach(e=>op(e,0)); next.classList.remove('new');
+      await sleep(200); show(cmd); await sleep(500); op(check,1); await sleep(800);
+      op(row,1); await sleep(500); next.classList.add('new'); op(avail,1); await sleep(900);
+      op(cmd2,1); await sleep(800); op(done,1);
+    },
+
+    async keepwarm(t){
+      const cmd=[...t.querySelectorAll('.ln.cmd')], rows=[...t.querySelectorAll('.lc')];
+      const clock=t.querySelector('[data-kw="clock"]'), min=t.querySelector('[data-kw="min"]');
+      const cold=t.querySelector('[data-kw="cold"]'), warm=t.querySelector('[data-kw="warm"]');
+      const coldSt=t.querySelector('[data-kw="cold-st"]'), warmSt=t.querySelector('[data-kw="warm-st"]');
+      const ping=t.querySelector('[data-kw="ping"]');
+      // reset
+      cmd.forEach(c=>c.classList.remove('show'));
+      rows.forEach(r=>{r.style.opacity=0; r.style.transition='opacity .4s';});
+      op(clock,0); ping.classList.remove('on'); coldSt.textContent=''; warmSt.textContent=''; min.textContent='0';
+      cold.style.transition='none'; cold.style.width='100%'; cold.className='fill g';
+      warm.style.transition='none'; warm.style.width='100%'; warm.className='fill g';
+      await sleep(180);
+      show(cmd[0]); await sleep(420);
+      for (const r of rows){ r.style.opacity=1; await sleep(280); }
+      await sleep(320); show(cmd[1]); await sleep(560);
+      op(clock,1);
+      // run the "hour": both caches drain; cold empties, keep-warm gets pinged
+      void cold.offsetWidth; void warm.offsetWidth;
+      cold.style.transition='width 4200ms linear'; cold.style.width='0%';
+      warm.style.transition='width 3000ms linear'; warm.style.width='16%';
+      countUp(min, 60, 4200);
+      await sleep(3000);
+      ping.classList.add('on');                                   // ~50 min: refresh
+      warm.style.transition='width 480ms cubic-bezier(.4,0,.15,1)'; warm.style.width='100%';
+      warmSt.innerHTML='<span class="ok">✓ cache read · refreshed</span>';
+      await sleep(760); ping.classList.remove('on');
+      await sleep(700);                                           // ~60 min: cold expires
+      cold.className='fill r'; cold.style.width='0%';
+      coldSt.innerHTML='<span class="err">✗ cold · re-pay ~40k</span>';
+      warmSt.innerHTML='<span class="ok">✓ warm · cheap read</span>';
+    }
+  };
+
+  document.querySelectorAll('[data-demo]').forEach(term => {
+    const kind = term.dataset.demo; let playing=false, played=false;
+    const run = async () => { if (playing) return; playing=true; try{ await D[kind](term);}finally{ playing=false; } };
+    new IntersectionObserver((es)=>es.forEach(e=>{ if(e.isIntersecting && !played){ played=true; run(); }}), {threshold:.4}).observe(term);
+    const btn = term.querySelector('[data-replay]'); if (btn) btn.addEventListener('click', run);
+  });
+})();
+</script>
+</body>
+</html>

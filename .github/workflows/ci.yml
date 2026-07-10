@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Syntax gate (the same check `claudex update` runs before self-installing)
+        run: python3 -m py_compile bin/claudex
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck install scripts
+        run: shellcheck install.sh uninstall.sh
+
+  pr-title:
+    # release-please derives the version bump from the (squash-merged) PR title,
+    # so enforce Conventional Commits on the title.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
