@@ -73,7 +73,8 @@ Swapping just the token leaves the app convinced it's still the old account (wro
 **Homebrew** (recommended):
 
 ```bash
-brew install vishalmakwana111/claudex/claudex
+brew tap vishalmakwana111/claudex   # one time
+brew install claudex
 ```
 
 **From source:**
