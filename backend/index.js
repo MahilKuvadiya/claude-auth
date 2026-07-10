@@ -35,7 +35,11 @@ const sm = new SecretManagerServiceClient();
 const pubsub = new PubSub({ projectId: PROJECT });
 
 // ---------- helpers ----------
-function bad(res, code, msg) { res.status(code).json({ error: msg }); }
+function bad(res, code, msg) {
+  // guard: only real HTTP codes reach res.status(); gRPC error codes (0-16) → 500
+  const c = Number.isInteger(code) && code >= 400 && code <= 599 ? code : 500;
+  res.status(c).json({ error: msg });
+}
 
 async function getJwtSecret() {
   const [v] = await sm.accessSecretVersion({ name: JWT_SECRET_NAME });
@@ -48,9 +52,10 @@ async function writeRefreshToken(poolId, memberId, refreshToken) {
   const parent = `projects/${PROJECT}`;
   const secretId = secretName(poolId, memberId);
   try {
-    await sm.createSecret({ parent, secretId,
-      secret: { replication: { userManaged: { replicas: [{ location: LOCATION,
-        customerManagedEncryption: { kmsKeyName: KMS_KEY } }] } } } });
+    // pilot: Google-managed encryption at rest. Phase-5 hardening switches this to
+    // CMEK (userManaged replica + kmsKeyName) once the Secret Manager service agent
+    // is granted cloudkms.cryptoKeyEncrypterDecrypter on the keyring.
+    await sm.createSecret({ parent, secretId, secret: { replication: { automatic: {} } } });
   } catch (e) { if (e.code !== 6 /* ALREADY_EXISTS */) throw e; }
   await sm.addSecretVersion({ parent: `${parent}/secrets/${secretId}`,
     payload: { data: Buffer.from(refreshToken, 'utf8') } });
