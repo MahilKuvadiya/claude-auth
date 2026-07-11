@@ -17,6 +17,7 @@ const { Firestore, FieldValue } = require('@google-cloud/firestore');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 const { PubSub } = require('@google-cloud/pubsub');
 const jwt = require('jsonwebtoken');
+require('./admin'); // registers the claudexAdmin function (create pool / join-links / revoke)
 
 // ---- config (env-overridable; defaults match the provisioned project) ----
 const PROJECT   = process.env.GCP_PROJECT || 'yash-test-495112';
