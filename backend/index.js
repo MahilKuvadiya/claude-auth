@@ -132,9 +132,28 @@ functions.http('poolJoin', async (req, res) => {
 // ============================================================
 functions.http('poolToken', async (req, res) => {
   try {
-    const { poolId } = await verifyMember(req);
+    const claims = await verifyMember(req);
+    const poolId = claims.poolId;
+
+    // ?members=1 → list every member of the pool (so the CLI's `pool members`
+    // and `pool use <name>` can see and switch between all seats, not just the
+    // caller's own). No tokens are returned here.
+    if (req.query.members) {
+      const snap = await db.collection('pools').doc(poolId).collection('members').get();
+      const members = snap.docs
+        .filter((d) => d.data().status !== 'revoked')
+        .map((d) => {
+          const f = d.data();
+          return {
+            memberId: d.id, email: f.email || null,
+            name: (f.email || d.id).split('@')[0], status: f.status || 'active',
+          };
+        });
+      return res.json({ members });
+    }
+
     const selected = (req.query.serve && String(req.query.serve)) || null;
-    const memberId = selected || (await verifyMember(req)).memberId; // default: serve own seat
+    const memberId = selected || claims.memberId; // default: serve own seat
 
     const mRef = db.collection('pools').doc(poolId).collection('members').doc(memberId);
     const token = await db.runTransaction(async (tx) => {  // serialize refresh per member
@@ -179,15 +198,39 @@ functions.http('telemetry', async (req, res) => {
       return topic.publishMessage({ json: { poolId, servingMemberId: ev.servingMemberId || memberId, ...ev } });
     }));
 
+    const inc = FieldValue.increment;
+    // per-member CONSUMED = attributed to the caller (the person whose proxy ran
+    // these tokens). Each member runs their own proxy with their own memberToken,
+    // so this is the accurate per-person usage count (the USP).
+    const consumed = {
+      tokensIn: inc(roll.tokensIn), tokensOut: inc(roll.tokensOut),
+      cacheRead: inc(roll.cacheRead), cacheWrite: inc(roll.cacheWrite), requests: inc(roll.requests),
+    };
+    // per-member CONTRIBUTED = grouped by whose token actually served each request.
+    const contrib = {};
+    for (const ev of events) {
+      const sid = ev.servingMemberId || memberId;
+      const c = contrib[sid] || (contrib[sid] = { tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0, requests: 0 });
+      c.tokensIn += ev.inputTokens || 0; c.tokensOut += ev.outputTokens || 0;
+      c.cacheRead += ev.cacheReadTokens || 0; c.cacheWrite += ev.cacheWriteTokens || 0; c.requests += ev.requests || 1;
+    }
+    const byMember = { [memberId]: { consumed } };
+    for (const [sid, c] of Object.entries(contrib)) {
+      byMember[sid] = byMember[sid] || {};
+      byMember[sid].contributed = {
+        tokensIn: inc(c.tokensIn), tokensOut: inc(c.tokensOut),
+        cacheRead: inc(c.cacheRead), cacheWrite: inc(c.cacheWrite), requests: inc(c.requests),
+      };
+    }
+
     const period = new Date().toISOString().slice(0, 10); // daily rollup
     await db.collection('pools').doc(poolId).collection('rollups').doc(period).set({
-      tokensIn: FieldValue.increment(roll.tokensIn),
-      tokensOut: FieldValue.increment(roll.tokensOut),
-      cacheRead: FieldValue.increment(roll.cacheRead),
-      cacheWrite: FieldValue.increment(roll.cacheWrite),
-      requests: FieldValue.increment(roll.requests),
-      [`byMember.${memberId}.tokensIn`]: FieldValue.increment(roll.tokensIn),
-      [`byMember.${memberId}.tokensOut`]: FieldValue.increment(roll.tokensOut),
+      tokensIn: inc(roll.tokensIn),
+      tokensOut: inc(roll.tokensOut),
+      cacheRead: inc(roll.cacheRead),
+      cacheWrite: inc(roll.cacheWrite),
+      requests: inc(roll.requests),
+      byMember, // proper nested map: { <memberId>: { consumed:{…}, contributed:{…} } }
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 

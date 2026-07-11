@@ -27,6 +27,19 @@ export function PoolDetail() {
   const cacheEff = totals.cr + totals.cw + totals.tin > 0 ? Math.round((totals.cr / (totals.cr + totals.cw + totals.tin)) * 100) : 0;
   const chart = (rollups.data ?? []).map((r) => ({ d: r.id.slice(5), cacheRead: r.cacheRead, output: r.tokensOut, input: r.tokensIn }));
 
+  // per-member token totals across the fetched rollups (the individual-count USP)
+  const perMember: Record<string, { consumed: number; contributed: number; requests: number }> = {};
+  const sumTally = (t?: { tokensIn?: number; tokensOut?: number; cacheRead?: number; cacheWrite?: number }) =>
+    (t?.tokensIn ?? 0) + (t?.tokensOut ?? 0) + (t?.cacheRead ?? 0) + (t?.cacheWrite ?? 0);
+  for (const r of rollups.data ?? []) {
+    for (const [mid, mv] of Object.entries(r.byMember ?? {})) {
+      const e = (perMember[mid] ??= { consumed: 0, contributed: 0, requests: 0 });
+      e.consumed += sumTally(mv.consumed);
+      e.contributed += sumTally(mv.contributed);
+      e.requests += mv.consumed?.requests ?? 0;
+    }
+  }
+
   return (
     <>
       <GlassPanel className="mb-4 flex items-center gap-3 p-[14px_18px]" spec={false}>
@@ -92,11 +105,13 @@ export function PoolDetail() {
           <table className="w-full border-collapse text-[.86rem]">
             <thead>
               <tr className="text-left font-mono text-[.66rem] uppercase tracking-[.08em] text-ink-faint">
-                <th className="pb-3">Member</th><th className="pb-3">Status</th><th className="pb-3">Headroom · 5h</th><th className="pb-3" />
+                <th className="pb-3">Member</th><th className="pb-3">Status</th>
+                <th className="pb-3">Consumed · 14d</th><th className="pb-3">Contributed · 14d</th>
+                <th className="pb-3">Headroom · 5h</th><th className="pb-3" />
               </tr>
             </thead>
             <tbody>
-              {members.map((m) => <MemberRow key={m.id} poolId={poolId} m={m} onChange={() => {}} />)}
+              {members.map((m) => <MemberRow key={m.id} poolId={poolId} m={m} tally={perMember[m.id]} />)}
             </tbody>
           </table>
         )}
@@ -131,7 +146,7 @@ function Tile({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function MemberRow({ poolId, m }: { poolId: string; m: Member; onChange: () => void }) {
+function MemberRow({ poolId, m, tally }: { poolId: string; m: Member; tally?: { consumed: number; contributed: number; requests: number } }) {
   const revoke = useMutation({ mutationFn: () => revokeMember(poolId, m.id) });
   const head = m.rateLimit?.fiveHourPct ?? null;
   return (
@@ -144,6 +159,13 @@ function MemberRow({ poolId, m }: { poolId: string; m: Member; onChange: () => v
           <i className="h-[7px] w-[7px] rounded-full" style={{ background: m.status === 'resting' ? 'var(--warn)' : m.status === 'revoked' ? 'var(--ink-faint)' : 'var(--accent)' }} />
           {m.status}
         </span>
+      </td>
+      <td className="border-t border-hairline py-3 tnum font-mono text-[.82rem]">
+        {tally?.consumed ? fmt(tally.consumed) : <span className="text-ink-faint">—</span>}
+        {tally?.requests ? <span className="ml-1 text-ink-faint">· {tally.requests} req</span> : null}
+      </td>
+      <td className="border-t border-hairline py-3 tnum font-mono text-[.82rem]" style={{ color: 'var(--accent)' }}>
+        {tally?.contributed ? fmt(tally.contributed) : <span className="text-ink-faint">—</span>}
       </td>
       <td className="border-t border-hairline py-3">
         {head === null ? <span className="text-ink-faint">—</span> : <><Meter pct={head} warn={head > 80} /> <span className="ml-2 tnum">{head}%</span></>}

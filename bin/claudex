@@ -1896,12 +1896,35 @@ class BackendStore:
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read().decode())
 
+    def list_members(self):
+        """All members of this pool, so `pool members` and `pool use <name>` see everyone."""
+        url = CLAUDEX_BACKEND["token"] + f"?pool={self.pool_id}&members=1"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.member_token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.loads(r.read().decode()).get("members", [])
+        except Exception as e:
+            _pool_log(f"backend member list failed: {e}")
+            return []
+
     def load(self):
-        d = self.fetch_token()
-        mid = d.get("servingMemberId") or self.member_id
-        return {"version": 1, "usage": {}, "served": {}, "members": {mid: {
-            "name": self.name, "accessToken": d.get("accessToken"),
-            "refreshToken": "__backend__", "expiresAt": d.get("expiresAt")}}}
+        # Return ALL pool members. Access tokens are minted on demand (token_for →
+        # fetch_token), so accessToken starts None; the "__backend__" refresh
+        # placeholder makes _reload_remote include every member.
+        members = {}
+        for m in self.list_members():
+            mid = m.get("memberId")
+            if not mid:
+                continue
+            members[mid] = {
+                "name": m.get("name") or (m.get("email") or mid).split("@")[0],
+                "email": m.get("email"),
+                "accessToken": None, "refreshToken": "__backend__", "expiresAt": None,
+            }
+        if not members:                       # fallback: at least our own seat
+            members[self.member_id] = {"name": self.name, "email": None,
+                "accessToken": None, "refreshToken": "__backend__", "expiresAt": None}
+        return {"version": 1, "usage": {}, "served": {}, "members": members}
 
     def save(self, pool):
         return   # backend owns token state; usage is sent via post_telemetry()

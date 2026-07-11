@@ -24,6 +24,15 @@ export const Member = z.object({
 });
 export type Member = z.infer<typeof Member>;
 
+const TokenTally = z.object({
+  tokensIn: z.number().default(0),
+  tokensOut: z.number().default(0),
+  cacheRead: z.number().default(0),
+  cacheWrite: z.number().default(0),
+  requests: z.number().default(0),
+}).partial();
+export type TokenTally = z.infer<typeof TokenTally>;
+
 export const Rollup = z.object({
   id: z.string(), // period, e.g. 2026-07-11
   tokensIn: z.number().default(0),
@@ -31,7 +40,7 @@ export const Rollup = z.object({
   cacheRead: z.number().default(0),
   cacheWrite: z.number().default(0),
   requests: z.number().default(0),
-  byMember: z.record(z.any()).optional(),
+  byMember: z.record(z.object({ consumed: TokenTally.optional(), contributed: TokenTally.optional() }).partial()).optional(),
 });
 export type Rollup = z.infer<typeof Rollup>;
 
