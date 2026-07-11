@@ -1,6 +1,6 @@
 import { auth, db, ADMIN_URL } from './firebase';
 import {
-  collection, getDocs, onSnapshot, query, where, orderBy, limit,
+  collection, getDocs, onSnapshot, query, where,
 } from 'firebase/firestore';
 import { Pool, Member, Rollup, JoinLink } from './types';
 
@@ -53,9 +53,13 @@ export function watchMembers(poolId: string, cb: (m: Member[]) => void, onErr: (
 }
 
 export async function fetchRollups(poolId: string, days = 14): Promise<Rollup[]> {
-  const q = query(collection(db, 'pools', poolId, 'rollups'), orderBy('__name__', 'desc'), limit(days));
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => Rollup.parse({ id: d.id, ...d.data() })).reverse();
+  // rollups are one small doc per day — fetch all and sort client-side so no
+  // Firestore composite index is required. Doc id is the ISO date (sortable).
+  const snap = await getDocs(collection(db, 'pools', poolId, 'rollups'));
+  return snap.docs
+    .map((d) => Rollup.parse({ id: d.id, ...d.data() }))
+    .sort((a, b) => (a.id < b.id ? -1 : 1))
+    .slice(-days);
 }
 
 export async function fetchOpenLinkCount(poolId: string): Promise<number> {
