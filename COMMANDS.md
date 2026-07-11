@@ -314,7 +314,7 @@ claudex pool clear  [--yes]
 | Action | Meaning |
 |--------|---------|
 | `create <pantry-id>` | Create the pool (needs a free pantry id from getpantry.cloud). Prints the share link. |
-| `join <link>` | Join with a `clpool:v1:…` link, contributing your current account in one step. |
+| `join <link>` | Join with a `clpool:v1:…` link. Signs in a **dedicated session** (its own refresh chain) and donates that — your own Claude Code login is captured, then restored, untouched. |
 | `use <name>` | Pick which member's token serves you — takes effect on **running** sessions instantly (no restart). |
 | `usage` | Live rate-limit headroom for each member (who to switch to). |
 | `members` | Members + per-type token tallies (input / output / cache-read / cache-write) contributed & consumed. |
@@ -325,6 +325,9 @@ claudex pool clear  [--yes]
 | Flag | Meaning |
 |------|---------|
 | `--live` | `pool members`: merge the running proxy's un-flushed counts for up-to-the-second totals. |
+| `--use-current` | `pool join`/`create`: donate the **current** live token instead of a dedicated sign-in. Only safe for an account not used by Claude Code elsewhere. |
+| `--email <addr>` | `pool join`/`create`: pre-fill the email on the dedicated sign-in. |
+| `--now` | `pool stop`: kill the proxy immediately (running sessions error) instead of leaving a passthrough shim. |
 | `--yes` | `pool clear`: skip the confirmation prompt. |
 
 ```bash
@@ -342,12 +345,16 @@ claudex pool members     # who's in + token tallies (add --live)
 
 Unlike the local pool, the shared pool **does not auto-failover**: it serves the **one** account you selected (so prompt caching stays intact). If it gets rate-limited, `pool use <name>` to another member — live.
 
+**Dedicated session (why `join` signs in again).** Claude's refresh tokens are *single-use* (each refresh rotates it), so the pool must not share the same session as your own Claude Code — otherwise whoever refreshes second gets locked out. `join` therefore mints a **separate** session for the pool and restores your own login afterward, giving the pool an independent refresh chain. Pass `--use-current` to skip this and donate the live token as-is — only do that for an account you don't use in Claude Code elsewhere.
+
+**Stopping without breaking running sessions.** `pool stop` doesn't kill the proxy outright — it flips it to a **passthrough shim** that forwards each request with the session's *own* token, so any Claude Code session still pointed at the port keeps working with **no restart** (new sessions go direct because `settings.json` is unwired). The shim self-exits once idle; `pool stop --now` kills it immediately.
+
 > **Security & trust model:**
 > - Tokens are **encrypted client-side** — the key lives in the link and is never sent to Pantry, which only stores ciphertext (encrypt-then-MAC, stdlib only).
 > - **Anyone with the link can decrypt every token and overwrite the blob.** Share it only with people you trust, over a private channel — treat it like an SSH key.
 > - `remove` / `leave` / `clear` **un-share** a token but do **not revoke** it; to truly invalidate, the owner must log out / re-login.
 >
-> **Known limits:** the store has no compare-and-swap, so simultaneous writes can lose one change (counters are approximate); Claude's refresh tokens are single-use, so a contributor who also uses Claude Code normally may get rotated out — dedicate an account to the pool or re-`join` occasionally.
+> **Known limits:** the store has no compare-and-swap, so simultaneous writes can lose one change (counters are approximate). A pooled member's machine being offline means its token can't be refreshed — the pool surfaces that so you can `pool use` a live member.
 >
 > **⚠️ Anthropic's terms:** pooling several people's subscriptions for one workflow may run against Anthropic's subscription terms. Use with people you trust, at your own discretion.
 
