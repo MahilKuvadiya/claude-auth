@@ -77,6 +77,55 @@ async function refreshAccessToken(refreshToken) {
   return r.json(); // { access_token, refresh_token, expires_in }
 }
 
+// A usable access token for a member (cached, refreshed if expiring). Read-only
+// callers (usage headroom) — not the serving hot path, so no per-member lock.
+async function memberAccessToken(poolId, memberId) {
+  const mRef = db.collection('pools').doc(poolId).collection('members').doc(memberId);
+  const snap = await mRef.get();
+  if (!snap.exists) return null;
+  const m = snap.data();
+  if (m.status === 'revoked') return null;
+  if (m.accessToken && m.accessExpiresAt && m.accessExpiresAt.toMillis() - Date.now() > ACCESS_SKEW_MS)
+    return m.accessToken;
+  try {
+    const rt = await readRefreshToken(poolId, memberId);
+    const fresh = await refreshAccessToken(rt);
+    const expiresAt = Date.now() + (fresh.expires_in || 3600) * 1000;
+    await mRef.update({ accessToken: fresh.access_token, accessExpiresAt: Firestore.Timestamp.fromMillis(expiresAt) });
+    if (fresh.refresh_token) await writeRefreshToken(poolId, memberId, fresh.refresh_token);
+    return fresh.access_token;
+  } catch (e) { return null; }
+}
+
+// Anthropic rate-limit usage for a member's token (same endpoint /status uses).
+async function anthropicUsage(token) {
+  try {
+    const r = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'anthropic-version': '2023-06-01' },
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+
+// Sum byMember.{consumed,contributed} across all rollups → per-member totals.
+async function memberTallies(poolId) {
+  const snap = await db.collection('pools').doc(poolId).collection('rollups').get();
+  const agg = {};
+  const K = ['tokensIn', 'tokensOut', 'cacheRead', 'cacheWrite', 'requests'];
+  for (const d of snap.docs) {
+    const bm = d.data().byMember || {};
+    for (const [mid, mv] of Object.entries(bm)) {
+      const a = agg[mid] || (agg[mid] = { consumed: {}, contributed: {} });
+      for (const sec of ['consumed', 'contributed']) {
+        const t = mv[sec] || {};
+        for (const k of K) a[sec][k] = (a[sec][k] || 0) + (t[k] || 0);
+      }
+    }
+  }
+  return agg;
+}
+
 async function verifyMember(req) {
   const auth = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!auth) throw Object.assign(new Error('missing member token'), { code: 401 });
@@ -132,9 +181,52 @@ functions.http('poolJoin', async (req, res) => {
 // ============================================================
 functions.http('poolToken', async (req, res) => {
   try {
-    const { poolId } = await verifyMember(req);
+    const claims = await verifyMember(req);
+    const poolId = claims.poolId;
+
+    // ?members=1 → every member + per-member consumed/contributed token totals
+    // (so `pool members` shows counts and `pool use <name>` can switch). No tokens.
+    if (req.query.members) {
+      const [snap, tallies] = await Promise.all([
+        db.collection('pools').doc(poolId).collection('members').get(),
+        memberTallies(poolId),
+      ]);
+      const members = snap.docs
+        .filter((d) => d.data().status !== 'revoked')
+        .map((d) => {
+          const f = d.data();
+          const t = tallies[d.id] || { consumed: {}, contributed: {} };
+          return {
+            memberId: d.id, email: f.email || null,
+            name: (f.email || d.id).split('@')[0], status: f.status || 'active',
+            subscriptionType: f.subscriptionType || null,
+            consumed: t.consumed, contributed: t.contributed,
+          };
+        });
+      return res.json({ members });
+    }
+
+    // ?usage=1 → live rate-limit headroom per member (backend holds the tokens,
+    // so it queries Anthropic on each member's behalf for `pool usage`).
+    if (req.query.usage) {
+      const snap = await db.collection('pools').doc(poolId).collection('members').get();
+      const active = snap.docs.filter((d) => d.data().status !== 'revoked');
+      const members = await Promise.all(active.map(async (d) => {
+        const f = d.data();
+        let usage = null;
+        const tok = await memberAccessToken(poolId, d.id);
+        if (tok) usage = await anthropicUsage(tok);
+        return {
+          memberId: d.id, email: f.email || null,
+          name: (f.email || d.id).split('@')[0],
+          subscriptionType: f.subscriptionType || null, usage,
+        };
+      }));
+      return res.json({ members });
+    }
+
     const selected = (req.query.serve && String(req.query.serve)) || null;
-    const memberId = selected || (await verifyMember(req)).memberId; // default: serve own seat
+    const memberId = selected || claims.memberId; // default: serve own seat
 
     const mRef = db.collection('pools').doc(poolId).collection('members').doc(memberId);
     const token = await db.runTransaction(async (tx) => {  // serialize refresh per member
@@ -179,15 +271,39 @@ functions.http('telemetry', async (req, res) => {
       return topic.publishMessage({ json: { poolId, servingMemberId: ev.servingMemberId || memberId, ...ev } });
     }));
 
+    const inc = FieldValue.increment;
+    // per-member CONSUMED = attributed to the caller (the person whose proxy ran
+    // these tokens). Each member runs their own proxy with their own memberToken,
+    // so this is the accurate per-person usage count (the USP).
+    const consumed = {
+      tokensIn: inc(roll.tokensIn), tokensOut: inc(roll.tokensOut),
+      cacheRead: inc(roll.cacheRead), cacheWrite: inc(roll.cacheWrite), requests: inc(roll.requests),
+    };
+    // per-member CONTRIBUTED = grouped by whose token actually served each request.
+    const contrib = {};
+    for (const ev of events) {
+      const sid = ev.servingMemberId || memberId;
+      const c = contrib[sid] || (contrib[sid] = { tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0, requests: 0 });
+      c.tokensIn += ev.inputTokens || 0; c.tokensOut += ev.outputTokens || 0;
+      c.cacheRead += ev.cacheReadTokens || 0; c.cacheWrite += ev.cacheWriteTokens || 0; c.requests += ev.requests || 1;
+    }
+    const byMember = { [memberId]: { consumed } };
+    for (const [sid, c] of Object.entries(contrib)) {
+      byMember[sid] = byMember[sid] || {};
+      byMember[sid].contributed = {
+        tokensIn: inc(c.tokensIn), tokensOut: inc(c.tokensOut),
+        cacheRead: inc(c.cacheRead), cacheWrite: inc(c.cacheWrite), requests: inc(c.requests),
+      };
+    }
+
     const period = new Date().toISOString().slice(0, 10); // daily rollup
     await db.collection('pools').doc(poolId).collection('rollups').doc(period).set({
-      tokensIn: FieldValue.increment(roll.tokensIn),
-      tokensOut: FieldValue.increment(roll.tokensOut),
-      cacheRead: FieldValue.increment(roll.cacheRead),
-      cacheWrite: FieldValue.increment(roll.cacheWrite),
-      requests: FieldValue.increment(roll.requests),
-      [`byMember.${memberId}.tokensIn`]: FieldValue.increment(roll.tokensIn),
-      [`byMember.${memberId}.tokensOut`]: FieldValue.increment(roll.tokensOut),
+      tokensIn: inc(roll.tokensIn),
+      tokensOut: inc(roll.tokensOut),
+      cacheRead: inc(roll.cacheRead),
+      cacheWrite: inc(roll.cacheWrite),
+      requests: inc(roll.requests),
+      byMember, // proper nested map: { <memberId>: { consumed:{…}, contributed:{…} } }
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
