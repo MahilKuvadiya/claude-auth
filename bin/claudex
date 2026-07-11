@@ -32,7 +32,7 @@ import concurrent.futures
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 
-__version__ = "1.15.0"  # x-release-please-version
+__version__ = "1.16.0"  # x-release-please-version
 
 API_USAGE = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
