@@ -1907,24 +1907,40 @@ class BackendStore:
             _pool_log(f"backend member list failed: {e}")
             return []
 
+    @staticmethod
+    def _remap(t):
+        """Backend tally keys → the CLI's canonical _TOK_KEYS."""
+        t = t or {}
+        return {"inputTokens": t.get("tokensIn", 0), "outputTokens": t.get("tokensOut", 0),
+                "cacheReadTokens": t.get("cacheRead", 0), "cacheWriteTokens": t.get("cacheWrite", 0),
+                "requests": t.get("requests", 0)}
+
     def load(self):
-        # Return ALL pool members. Access tokens are minted on demand (token_for →
-        # fetch_token), so accessToken starts None; the "__backend__" refresh
-        # placeholder makes _reload_remote include every member.
-        members = {}
+        # ALL members + per-member tallies. served=contributed (their token served),
+        # usage=consumed (tokens they ran). Access tokens minted on demand.
+        members, served, usage = {}, {}, {}
         for m in self.list_members():
             mid = m.get("memberId")
             if not mid:
                 continue
             members[mid] = {
                 "name": m.get("name") or (m.get("email") or mid).split("@")[0],
-                "email": m.get("email"),
+                "email": m.get("email"), "subscriptionType": m.get("subscriptionType"),
                 "accessToken": None, "refreshToken": "__backend__", "expiresAt": None,
             }
+            served[mid] = self._remap(m.get("contributed"))
+            usage[mid] = self._remap(m.get("consumed"))
         if not members:                       # fallback: at least our own seat
             members[self.member_id] = {"name": self.name, "email": None,
                 "accessToken": None, "refreshToken": "__backend__", "expiresAt": None}
-        return {"version": 1, "usage": {}, "served": {}, "members": members}
+        return {"version": 1, "usage": usage, "served": served, "members": members}
+
+    def fetch_usage_all(self):
+        """Per-member live rate-limit headroom (the backend queries Anthropic)."""
+        url = CLAUDEX_BACKEND["token"] + f"?pool={self.pool_id}&usage=1"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.member_token}"})
+        with urllib.request.urlopen(req, timeout=40) as r:
+            return json.loads(r.read().decode()).get("members", [])
 
     def save(self, pool):
         return   # backend owns token state; usage is sent via post_telemetry()
@@ -3275,13 +3291,27 @@ def cmd_pool_usage(args):
     if _TTY:
         sys.stdout.write(IND + clay("›") + " Fetching pool usage…")
         sys.stdout.flush()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-        results = {mid: (u, err) for mid, u, err in ex.map(work, list(members.items()))}
-    if dirty["v"]:                                        # save any tokens we refreshed
+    if getattr(store, "is_backend", False):
+        # backend holds the tokens and queries Anthropic for each member's headroom
         try:
-            store.save(pool)
-        except Exception:
-            pass
+            raw = {m["memberId"]: m for m in store.fetch_usage_all()}
+        except Exception as e:
+            if _TTY:
+                sys.stdout.write("\r\033[2K"); sys.stdout.flush()
+            die(f"couldn't reach the pool: {e}")
+        results = {}
+        for mid in members:
+            mm = raw.get(mid, {})
+            u = parse_usage(mm["usage"]) if mm.get("usage") else None
+            results[mid] = (u, None if u else "no headroom data")
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+            results = {mid: (u, err) for mid, u, err in ex.map(work, list(members.items()))}
+        if dirty["v"]:                                    # save any tokens we refreshed
+            try:
+                store.save(pool)
+            except Exception:
+                pass
     if _TTY:
         sys.stdout.write("\r\033[2K")
         sys.stdout.flush()
