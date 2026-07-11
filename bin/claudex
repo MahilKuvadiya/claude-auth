@@ -2156,14 +2156,19 @@ class _Pool:
     def selected_account(self):
         """The account the member has chosen to serve from (shared pool).
 
-        Falls back to the member's own contributed account, then the first
-        available. Read fresh each call so `pool use` takes effect live."""
-        sid = _selected_member_id() or self.consumer_id
+        Read fresh each call so `pool use` takes effect live. If an explicit
+        selection can't be resolved, return None so the caller surfaces an error
+        — NEVER silently serve a different account (that would spend the wrong
+        member's limit while `pool use` claims otherwise)."""
+        sel = _selected_member_id()               # explicit `pool use` choice, if any
+        sid = sel or self.consumer_id
         with self.lock:
             if sid:
                 for a in self.accounts:
                     if a["member_id"] == sid:
                         return a
+            if sel:                               # explicit selection but not found
+                return None                       # → don't fall back; surface it
             return self.accounts[0] if self.accounts else None
 
     def pick(self, exclude=()):
