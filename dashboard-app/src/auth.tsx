@@ -1,16 +1,26 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { onIdTokenChanged, signInWithPopup, signOut, User } from 'firebase/auth';
-import { auth, googleProvider, ALLOWED_DOMAIN } from './firebase';
+import {
+  onIdTokenChanged, signInWithEmailAndPassword, sendPasswordResetEmail, signOut, User,
+} from 'firebase/auth';
+import { auth } from './firebase';
 
 interface AuthState {
   user: User | null;
   role: string | null;
   loading: boolean;
   error: string | null;
-  signIn: () => Promise<void>;
+  signIn: (email: string, password: string) => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 const Ctx = createContext<AuthState | null>(null);
+
+function friendly(code: string) {
+  if (code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found'))
+    return 'Incorrect email or password.';
+  if (code.includes('too-many-requests')) return 'Too many attempts — try again shortly.';
+  return 'Sign-in failed. Please try again.';
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -21,12 +31,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(
     () =>
       onIdTokenChanged(auth, async (u) => {
-        if (u && !u.email?.endsWith(`@${ALLOWED_DOMAIN}`)) {
-          await signOut(auth);
-          setError(`Only @${ALLOWED_DOMAIN} accounts can sign in.`);
-          setUser(null); setRole(null); setLoading(false);
-          return;
-        }
         setUser(u);
         setRole(u ? ((await u.getIdTokenResult()).claims.role as string) ?? null : null);
         setLoading(false);
@@ -34,14 +38,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const signIn = async () => {
+  const signIn = async (email: string, password: string) => {
     setError(null);
-    try { await signInWithPopup(auth, googleProvider); }
-    catch (e) { setError((e as Error).message); }
+    try { await signInWithEmailAndPassword(auth, email.trim(), password); }
+    catch (e) { setError(friendly((e as { code?: string }).code || '')); throw e; }
+  };
+  const resetPassword = async (email: string) => {
+    setError(null);
+    await sendPasswordResetEmail(auth, email.trim());
   };
   const logout = () => signOut(auth);
 
-  return <Ctx.Provider value={{ user, role, loading, error, signIn, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, role, loading, error, signIn, resetPassword, logout }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => {
