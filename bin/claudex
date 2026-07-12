@@ -28,9 +28,28 @@ import argparse
 import urllib.request
 import urllib.error
 import http.client
+import ssl
 import concurrent.futures
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
+
+# When compiled with Nuitka, the bundled OpenSSL's default CA path points at the
+# build machine (absent on the user's Mac) → HTTPS fails with "unable to get local
+# issuer". macOS always ships a system CA bundle at /etc/ssl/cert.pem, so load it
+# explicitly. Routing the default HTTPS-context factory through this covers every
+# urllib request and http.client.HTTPSConnection in one place.
+_MACOS_CA_BUNDLE = "/etc/ssl/cert.pem"
+
+def _macos_ssl_context(*args, **kwargs):
+    ctx = ssl.create_default_context(*args, **kwargs)
+    try:
+        if os.path.exists(_MACOS_CA_BUNDLE):
+            ctx.load_verify_locations(_MACOS_CA_BUNDLE)
+    except Exception:
+        pass
+    return ctx
+
+ssl._create_default_https_context = _macos_ssl_context
 
 __version__ = "2.0.0"  # x-release-please-version
 
