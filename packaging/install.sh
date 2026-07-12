@@ -69,15 +69,46 @@ xattr -d com.apple.quarantine "$DEST" 2>/dev/null || true
 
 echo "✓ installed claudex → $DEST"
 
-# ── PATH hint ────────────────────────────────────────────────────────────────
-case ":$PATH:" in
-  *":$DEST_DIR:"*) : ;;
-  *)
+# ── ensure ~/.local/bin is on PATH (configure the shell startup file for them) ─
+# Intentionally literal: $HOME/$PATH must expand at shell startup, not now.
+# shellcheck disable=SC2016
+path_line='export PATH="$HOME/.local/bin:$PATH"'
+
+already_on_path() {
+  case ":$PATH:" in *":$DEST_DIR:"*) return 0 ;; *) return 1 ;; esac
+}
+
+if already_on_path; then
+  :   # nothing to do — claudex is immediately runnable
+elif [ -n "${CLAUDEX_NO_MODIFY_PATH:-}" ]; then
+  # Opt-out: don't touch their dotfiles, just tell them what to add.
+  echo
+  echo "⚠  $DEST_DIR is not on your PATH. Add this to your shell startup file:"
+  echo "     $path_line"
+else
+  # Pick the startup file macOS actually reads for the user's login shell.
+  case "$(basename "${SHELL:-/bin/zsh}")" in
+    zsh)  rc="$HOME/.zshrc" ;;
+    bash) rc="$HOME/.bash_profile" ;;
+    *)    rc="" ;;
+  esac
+
+  if [ -z "$rc" ]; then
     echo
-    echo "⚠  $DEST_DIR is not on your PATH. Add it:"
-    echo "     echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
-    ;;
-esac
+    echo "⚠  Add this to your shell startup file so 'claudex' is found:"
+    echo "     $path_line"
+  elif [ -f "$rc" ] && grep -qF "$path_line" "$rc"; then
+    echo "✓ $DEST_DIR already configured in $rc — open a new terminal"
+  else
+    {
+      echo ""
+      echo "# Added by the claudex installer — put ~/.local/bin on PATH"
+      echo "$path_line"
+    } >> "$rc"
+    echo "✓ added $DEST_DIR to your PATH in $rc"
+    echo "→ open a new terminal (or run:  source $rc)  to use 'claudex'"
+  fi
+fi
 
 echo
 "$DEST" --version || true

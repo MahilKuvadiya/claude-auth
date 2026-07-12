@@ -74,7 +74,7 @@ One command — nothing else to set up:
 curl -fsSL https://storage.googleapis.com/claudex-dist/install.sh | bash
 ```
 
-This downloads the `claudex` binary, **verifies its SHA256 checksum**, installs it to `~/.local/bin/claudex`, and clears the download quarantine so macOS runs it without a Gatekeeper prompt. No GitHub account, login, or token required.
+This downloads the `claudex` binary, **verifies its SHA256 checksum**, installs it to `~/.local/bin/claudex`, adds that directory to your `PATH` (in `~/.zshrc`/`~/.bash_profile`), and clears the download quarantine so macOS runs it without a Gatekeeper prompt. Open a new terminal afterward. No GitHub account, login, or token required. (Set `CLAUDEX_NO_MODIFY_PATH=1` to skip the PATH edit.)
 
 > `claudex` ships as a compiled binary — the source lives in a private repository and is never distributed. On an Intel Mac the installer prints a clear "no Intel build available" message and stops.
 
