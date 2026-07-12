@@ -1,7 +1,7 @@
 ---
 // Keep-warm: a session's prompt cache has a ~1h TTL. Every ~50 min the proxy replays
 // the last request as a cheap cache-read, resetting the timer. viewBox 560×160, no clipping.
-const caption = 'A cheap cache-read every ~50 min resets the 1-hour prompt-cache TTL — so returning stays ~0.1× cost.';
+const caption = 'A cheap cache-read every ~50 min resets the 1-hour prompt-cache TTL — far cheaper than re-processing the whole context cold on your next turn.';
 ---
 <figure class="mgfx">
   <svg viewBox="0 0 560 160" role="img" aria-label="Keep-warm cache TTL reset" style="width:100%;height:auto">

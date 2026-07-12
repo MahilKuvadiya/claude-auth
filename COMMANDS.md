@@ -389,7 +389,7 @@ Each row shows the project (cwd), git branch, auto-title, context size, and idle
 
 ### `keep-warm`
 
-Keep a specific idle session's prompt cache alive. Claude Code caches your conversation with a **1-hour** TTL; step away longer and the next turn re-sends the whole conversation at full price. While a warmed session sits idle, a local proxy replays its last request as a cheap **cache read** (~0.1× the context) every ~50 minutes, refreshing the 1-hour timer.
+Keep a specific idle session's prompt cache alive. Claude Code caches your conversation with a **1-hour** TTL (its requests carry `cache_control: {ttl: "1h"}`); step away longer and the next turn re-processes the whole conversation as fresh input. While a warmed session sits idle, a local proxy replays its last request as a cheap **cache read** every ~50 minutes, refreshing the 1-hour timer. A cache read is far cheaper than fresh input — ~0.1× the token price on the pay-per-token API, and on a Claude Code subscription it barely touches your rate limit (measured: millions of cache-read tokens moved the 5-hour window ~0%, vs ~1% per a few-hundred-thousand fresh tokens).
 
 ```
 claudex keep-warm [start|stop|status|add|rm|list]

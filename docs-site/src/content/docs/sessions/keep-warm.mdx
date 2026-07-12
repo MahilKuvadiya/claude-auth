@@ -7,11 +7,26 @@ sidebar:
 
 import KeepWarm from '../../../components/mgfx/KeepWarm.astro';
 
-Claude Code caches a conversation's prompt with a ~1-hour TTL. While a warmed session is idle,
-keep-warm replays its last request as a cheap **cache-read** (~0.1× context) every ~50 min — so the
-timer never expires and returning to the session stays cheap.
+Claude Code caches a conversation's prompt with a **1-hour TTL** (its requests carry
+`cache_control: {ttl: "1h"}`). While a warmed session is idle, keep-warm replays its last request
+every ~50 min — inside that 1-hour window, so it lands as a **cache-read** and resets the timer,
+instead of letting the cache expire and forcing a full re-process on your next turn.
 
 <KeepWarm />
+
+:::note[What a ping actually costs]
+A ping is a **cache-read**, which is far cheaper than fresh input:
+
+- **On pay-per-token API billing:** cache reads are ~**0.1×** the normal input price (Anthropic's
+  published rate).
+- **On a Claude Code subscription (Pro/Max/Team):** there's **no per-token dollar cost** — you have
+  rate-limit windows (5-hour + weekly). In our own measurements, **fresh input moved the 5-hour
+  meter ~1% per a few-hundred-thousand tokens, while millions of cache-read tokens moved it ~0%** —
+  i.e. a ping barely touches your rate limit. (Plan size sets the window: a bigger plan absorbs more
+  before the meter ticks.)
+
+Either way, a ping costs a small fraction of what a cold re-process of the whole context would.
+:::
 
 ```bash
 claudex keep-warm start                # start the proxy + wire ANTHROPIC_BASE_URL
