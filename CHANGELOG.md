@@ -4,6 +4,13 @@ All notable changes are documented here. This file is maintained automatically b
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit
 messages; the entry below the header is the pre-automation baseline.
 
+## [2.0.1](https://github.com/vishalmakwana111/claudex/compare/v2.0.0...v2.0.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* verify TLS via the macOS system CA bundle in the compiled binary ([#22](https://github.com/vishalmakwana111/claudex/issues/22)) ([abc7f53](https://github.com/vishalmakwana111/claudex/commit/abc7f5360eb068bb4983d6909cf0067d0337b86a))
+
 ## [2.0.0](https://github.com/vishalmakwana111/claudex/compare/v1.16.0...v2.0.0) (2026-07-12)
 
 
