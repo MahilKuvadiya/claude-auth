@@ -4,6 +4,13 @@ All notable changes are documented here. This file is maintained automatically b
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit
 messages; the entry below the header is the pre-automation baseline.
 
+## [2.1.0](https://github.com/vishalmakwana111/claudex/compare/v2.0.2...v2.1.0) (2026-07-12)
+
+
+### Features
+
+* unified REST API, REST-based dashboard, docs site, faster CLI startup ([#26](https://github.com/vishalmakwana111/claudex/issues/26)) ([7815321](https://github.com/vishalmakwana111/claudex/commit/7815321b9011fbfd1b002a82cc3446a382206b49))
+
 ## [2.0.2](https://github.com/vishalmakwana111/claudex/compare/v2.0.1...v2.0.2) (2026-07-12)
 
 
