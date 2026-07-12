@@ -1,0 +1,11 @@
+---
+// Interactive OpenAPI reference embedded in-page (no iframe — the API sends
+// X-Frame-Options: SAMEORIGIN, so it can't be framed cross-origin). Scalar's
+// standalone fetches the spec from the API's public /v1/openapi.json (CORS-open).
+const specUrl = import.meta.env.PUBLIC_API_SPEC
+  || 'https://claudex-api-632653045864.asia-south1.run.app/v1/openapi.json';
+---
+<div class="scalar-embed" style="border:1px solid var(--sl-color-gray-5);border-radius:12px;overflow:hidden;min-height:640px">
+  <script is:inline id="api-reference" data-url={specUrl}></script>
+  <script is:inline src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</div>
