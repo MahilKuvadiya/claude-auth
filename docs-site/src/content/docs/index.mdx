@@ -3,7 +3,7 @@ title: What is claudex
 description: Switch, pool, warm, and track multiple Claude Code accounts on one Mac.
 ---
 
-import Lottie from '../../components/mgfx/Lottie.astro';
+import Hero from '../../components/mgfx/Hero.astro';
 import Switch from '../../components/mgfx/Switch.astro';
 
 **claudex** manages multiple Claude Code accounts on one Mac — like `gh auth switch`, but for
@@ -11,7 +11,7 @@ Claude Code. Save each account once, then flip between them instantly; pool them
 auto-failover proxy; keep an idle session's prompt cache warm; and track rate-limit usage across
 all of them — without ever logging out and back in.
 
-<Lottie src="/anim/hero.lottie" caption="claudex at a glance" height={280} />
+<Hero />
 
 ## Why it exists
 
@@ -37,6 +37,6 @@ Swapping only the token leaves the app convinced it's still the old account. A c
 - **[API](/api/overview/)** — the REST API powering pooling + the dashboard.
 
 :::note[Animations]
-Explainers on this site are motion-graphic. Designed Lottie assets drop into `public/anim/`; where one
-isn't present yet, a hand-built SVG explainer plays instead.
+The explainers on this site are motion-graphic SVG. Designed Lottie assets can be dropped into
+`public/anim/` and rendered with the `<Lottie/>` component where richer animation is wanted.
 :::

@@ -1,37 +1,45 @@
 ---
-// The atomic two-part switch: Keychain credential + ~/.claude.json identity swap
-// together from "personal" to "work". Pure SVG + CSS keyframes.
-const caption = 'A switch swaps BOTH the Keychain credential and the identity file — atomically.';
+// The atomic two-part switch: Keychain credential + ~/.claude.json identity flip
+// from "personal" to "work" TOGETHER. All elements stay within the 560×180 viewBox.
+const caption = 'A switch flips BOTH the Keychain credential and the identity file — together, atomically.';
 ---
 <figure class="mgfx">
-  <svg viewBox="0 0 520 200" role="img" aria-label="Atomic account switch" style="width:100%;height:auto">
+  <svg viewBox="0 0 560 180" role="img" aria-label="Atomic account switch" style="width:100%;height:auto">
     <style>
-      .lane{fill:none;stroke:var(--sl-color-gray-5);stroke-width:1.5;rx:10}
-      .lbl{fill:var(--sl-color-gray-3);font:600 11px ui-monospace,monospace}
+      .lbl{fill:var(--sl-color-gray-3);font:600 12px ui-monospace,monospace}
       .chip{rx:8}
-      .personal{fill:var(--clay-deep)}
-      .work{fill:var(--clay)}
-      .txt{fill:#fff;font:600 12px ui-sans-serif,system-ui}
-      .swap1{animation:swap 5s ease-in-out infinite}
-      .swap2{animation:swap 5s ease-in-out infinite}
-      @keyframes swap{0%,18%{transform:translateX(0)}32%,68%{transform:translateX(300px)}82%,100%{transform:translateX(0)}}
-      .check{opacity:0;animation:blip 5s ease-in-out infinite}
-      @keyframes blip{0%,34%{opacity:0}40%,64%{opacity:1}70%,100%{opacity:0}}
+      .m{font:600 11px ui-sans-serif,system-ui;fill:#fff}
+      .from{fill:var(--clay-deep)}
+      /* the "work" (to) chips + arrows + check pulse in sync = the atomic swap */
+      .to{fill:var(--clay);opacity:.28;animation:sw 4s ease-in-out infinite}
+      .fromfade{animation:fade 4s ease-in-out infinite}
+      .arr{stroke:var(--clay);stroke-width:1.6;fill:none;opacity:.4;animation:sw 4s ease-in-out infinite}
+      .chk{opacity:0;animation:chk 4s ease-in-out infinite}
+      @keyframes sw{0%,20%{opacity:.28}45%,80%{opacity:1}95%,100%{opacity:.28}}
+      @keyframes fade{0%,20%{opacity:1}45%,80%{opacity:.35}95%,100%{opacity:1}}
+      @keyframes chk{0%,30%{opacity:0}50%,78%{opacity:1}92%,100%{opacity:0}}
     </style>
-    <text class="lbl" x="14" y="40">Keychain</text>
-    <rect class="lane" x="120" y="24" width="380" height="40"></rect>
-    <g class="swap1"><rect class="chip personal" x="128" y="30" width="120" height="28"></rect>
-      <text class="txt" x="150" y="49">token · personal</text></g>
 
-    <text class="lbl" x="14" y="128">~/.claude.json</text>
-    <rect class="lane" x="120" y="112" width="380" height="40"></rect>
-    <g class="swap2"><rect class="chip work" x="128" y="118" width="120" height="28" style="fill:var(--clay-deep)"></rect>
-      <text class="txt" x="146" y="137">identity · personal</text></g>
+    <!-- row 1: Keychain -->
+    <text class="lbl" x="16" y="52">Keychain</text>
+    <g class="fromfade"><rect class="chip from" x="170" y="34" width="110" height="30"></rect>
+      <text class="m" x="196" y="53">personal</text></g>
+    <path class="arr" d="M292 49 h34 m-8 -6 l8 6 l-8 6"></path>
+    <g class="to"><rect class="chip" x="340" y="34" width="110" height="30" fill="var(--clay)"></rect>
+      <text class="m" x="376" y="53">work</text></g>
 
-    <g class="check">
-      <circle cx="470" cy="186" r="10" fill="var(--clay)"></circle>
-      <path d="M465 186 l4 4 l7 -8" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"></path>
-      <text class="lbl" x="300" y="191" style="fill:var(--clay)">switched to work ✓</text>
+    <!-- row 2: identity -->
+    <text class="lbl" x="16" y="122">~/.claude.json</text>
+    <g class="fromfade"><rect class="chip from" x="170" y="104" width="110" height="30"></rect>
+      <text class="m" x="196" y="123">personal</text></g>
+    <path class="arr" d="M292 119 h34 m-8 -6 l8 6 l-8 6"></path>
+    <g class="to"><rect class="chip" x="340" y="104" width="110" height="30" fill="var(--clay)"></rect>
+      <text class="m" x="376" y="123">work</text></g>
+
+    <!-- atomic checkmark -->
+    <g class="chk">
+      <circle cx="478" cy="86" r="11" fill="var(--clay)"></circle>
+      <path d="M473 86 l3.5 3.5 l7 -8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path>
     </g>
   </svg>
   <figcaption>{caption}</figcaption>

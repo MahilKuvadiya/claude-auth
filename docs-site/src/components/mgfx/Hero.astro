@@ -1,0 +1,42 @@
+---
+// Landing hero: multiple accounts converge through claudex into one Claude Code.
+// Pure SVG + CSS; everything stays within the 560×180 viewBox (no clipping).
+---
+<figure class="mgfx">
+  <svg viewBox="0 0 560 190" role="img" aria-label="claudex routes many accounts into Claude Code" style="width:100%;height:auto">
+    <style>
+      .t{fill:var(--sl-color-gray-3);font:600 12px ui-sans-serif,system-ui}
+      .m{font:600 11px ui-monospace,monospace}
+      .acct{rx:9}
+      .hub{fill:color-mix(in srgb,var(--clay) 20%,transparent);stroke:var(--clay);stroke-width:1.5}
+      .wire{stroke:var(--sl-color-gray-4);stroke-width:1.5;fill:none;stroke-dasharray:3 4}
+      .p{fill:var(--clay);r:4}
+      .p1{offset-path:path('M150 45 L250 95');animation:f 2.4s linear infinite}
+      .p2{offset-path:path('M150 95 L250 95');animation:f 2.4s .3s linear infinite}
+      .p3{offset-path:path('M150 145 L250 95');animation:f 2.4s .6s linear infinite}
+      .p4{offset-path:path('M330 95 L430 95');animation:f 1.6s linear infinite}
+      @keyframes f{from{offset-distance:0%;opacity:.15}20%{opacity:1}to{offset-distance:100%;opacity:.15}}
+      .glow{animation:glow 2.4s ease-in-out infinite}
+      @keyframes glow{0%,100%{opacity:.85}50%{opacity:1}}
+    </style>
+    <!-- accounts -->
+    <g class="m" fill="#fff">
+      <rect class="acct" x="20" y="32" width="120" height="26" fill="var(--clay-deep)"></rect><text x="34" y="49">personal</text>
+      <rect class="acct" x="20" y="82" width="120" height="26" fill="var(--clay-deep)"></rect><text x="46" y="99">work</text>
+      <rect class="acct" x="20" y="132" width="120" height="26" fill="var(--clay-deep)"></rect><text x="40" y="149">client</text>
+    </g>
+    <path class="wire" d="M150 45 L250 95"></path>
+    <path class="wire" d="M150 95 L250 95"></path>
+    <path class="wire" d="M150 145 L250 95"></path>
+    <circle class="p p1"></circle><circle class="p p2"></circle><circle class="p p3"></circle>
+    <!-- hub -->
+    <rect class="hub glow acct" x="250" y="78" width="90" height="34"></rect>
+    <text class="m" x="266" y="100" fill="var(--clay)">claudex</text>
+    <path class="wire" d="M340 95 L430 95"></path>
+    <circle class="p p4"></circle>
+    <!-- claude code -->
+    <rect class="acct" x="430" y="78" width="120" height="34" fill="none" stroke="var(--sl-color-gray-4)" stroke-width="1.5"></rect>
+    <text class="t" x="444" y="99">Claude Code</text>
+  </svg>
+  <figcaption>Save every account once — switch, pool, and warm them through one tool.</figcaption>
+</figure>
