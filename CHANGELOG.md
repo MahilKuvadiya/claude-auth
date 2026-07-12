@@ -4,6 +4,13 @@ All notable changes are documented here. This file is maintained automatically b
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit
 messages; the entry below the header is the pre-automation baseline.
 
+## [2.1.1](https://github.com/vishalmakwana111/claudex/compare/v2.1.0...v2.1.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **docs:** perfect the animations + slim the README ([#28](https://github.com/vishalmakwana111/claudex/issues/28)) ([18abeb2](https://github.com/vishalmakwana111/claudex/commit/18abeb261998ec67f90f20dabea30c4098311e17))
+
 ## [2.1.0](https://github.com/vishalmakwana111/claudex/compare/v2.0.2...v2.1.0) (2026-07-12)
 
 
