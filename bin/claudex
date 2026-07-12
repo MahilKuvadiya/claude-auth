@@ -51,7 +51,7 @@ def _macos_ssl_context(*args, **kwargs):
 
 ssl._create_default_https_context = _macos_ssl_context
 
-__version__ = "2.0.1"  # x-release-please-version
+__version__ = "2.0.2"  # x-release-please-version
 
 API_USAGE = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"

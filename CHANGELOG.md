@@ -4,6 +4,13 @@ All notable changes are documented here. This file is maintained automatically b
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit
 messages; the entry below the header is the pre-automation baseline.
 
+## [2.0.2](https://github.com/vishalmakwana111/claudex/compare/v2.0.1...v2.0.2) (2026-07-12)
+
+
+### Bug Fixes
+
+* installer adds ~/.local/bin to PATH automatically ([#24](https://github.com/vishalmakwana111/claudex/issues/24)) ([5931723](https://github.com/vishalmakwana111/claudex/commit/593172324ab72c0fac9393573198046c27ecb366))
+
 ## [2.0.1](https://github.com/vishalmakwana111/claudex/compare/v2.0.0...v2.0.1) (2026-07-12)
 
 
