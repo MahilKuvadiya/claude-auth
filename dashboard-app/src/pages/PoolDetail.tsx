@@ -1,21 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AreaChart, Area, ResponsiveContainer, XAxis, Tooltip } from 'recharts';
-import { watchMembers, fetchRollups, createJoinLink, listJoinLinks, revokeMember } from '../api';
-import type { Member } from '../types';
+import { fetchMembers, fetchRollups, createJoinLink, listJoinLinks, revokeMember } from '../api';
+import type { Member, TokenTally } from '../types';
 import { GlassPanel, Card, Button, Pill, Meter, Skeleton, ErrorState, EmptyState, GlassModal } from '../components/glass';
 
 const fmt = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${n}`);
+const sumTally = (t?: TokenTally) => (t?.tokensIn ?? 0) + (t?.tokensOut ?? 0) + (t?.cacheRead ?? 0) + (t?.cacheWrite ?? 0);
 
 export function PoolDetail() {
   const { poolId = '' } = useParams();
-  const [members, setMembers] = useState<Member[] | null>(null);
-  const [memErr, setMemErr] = useState<string | null>(null);
   const [invite, setInvite] = useState(false);
 
-  // realtime members
-  useEffect(() => watchMembers(poolId, setMembers, (e) => setMemErr(e.message)), [poolId]);
+  // members — polled (was a Firestore realtime subscription; now via the REST API)
+  const membersQ = useQuery({ queryKey: ['members', poolId], queryFn: () => fetchMembers(poolId), refetchInterval: 10_000 });
+  const members = membersQ.data ?? null;
+  const memErr = membersQ.error ? (membersQ.error as Error).message : null;
 
   const rollups = useQuery({ queryKey: ['rollups', poolId], queryFn: () => fetchRollups(poolId) });
   const links = useQuery({ queryKey: ['links', poolId], queryFn: () => listJoinLinks(poolId) });
@@ -26,19 +27,6 @@ export function PoolDetail() {
   );
   const cacheEff = totals.cr + totals.cw + totals.tin > 0 ? Math.round((totals.cr / (totals.cr + totals.cw + totals.tin)) * 100) : 0;
   const chart = (rollups.data ?? []).map((r) => ({ d: r.id.slice(5), cacheRead: r.cacheRead, output: r.tokensOut, input: r.tokensIn }));
-
-  // per-member token totals across the fetched rollups (the individual-count USP)
-  const perMember: Record<string, { consumed: number; contributed: number; requests: number }> = {};
-  const sumTally = (t?: { tokensIn?: number; tokensOut?: number; cacheRead?: number; cacheWrite?: number }) =>
-    (t?.tokensIn ?? 0) + (t?.tokensOut ?? 0) + (t?.cacheRead ?? 0) + (t?.cacheWrite ?? 0);
-  for (const r of rollups.data ?? []) {
-    for (const [mid, mv] of Object.entries(r.byMember ?? {})) {
-      const e = (perMember[mid] ??= { consumed: 0, contributed: 0, requests: 0 });
-      e.consumed += sumTally(mv.consumed);
-      e.contributed += sumTally(mv.contributed);
-      e.requests += mv.consumed?.requests ?? 0;
-    }
-  }
 
   return (
     <>
@@ -111,7 +99,10 @@ export function PoolDetail() {
               </tr>
             </thead>
             <tbody>
-              {members.map((m) => <MemberRow key={m.id} poolId={poolId} m={m} tally={perMember[m.id]} />)}
+              {members.map((m) => (
+                <MemberRow key={m.memberId} poolId={poolId} m={m}
+                  tally={{ consumed: sumTally(m.consumed), contributed: sumTally(m.contributed), requests: m.consumed?.requests ?? 0 }} />
+              ))}
             </tbody>
           </table>
         )}
@@ -147,12 +138,12 @@ function Tile({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function MemberRow({ poolId, m, tally }: { poolId: string; m: Member; tally?: { consumed: number; contributed: number; requests: number } }) {
-  const revoke = useMutation({ mutationFn: () => revokeMember(poolId, m.id) });
+  const revoke = useMutation({ mutationFn: () => revokeMember(poolId, m.memberId) });
   const head = m.rateLimit?.fiveHourPct ?? null;
   return (
     <tr>
       <td className="border-t border-hairline py-3">
-        <div className="font-medium">{m.email ?? m.id}</div>
+        <div className="font-medium">{m.email ?? m.name ?? m.memberId}</div>
       </td>
       <td className="border-t border-hairline py-3">
         <span className="inline-flex items-center gap-[6px] text-[.78rem]">

@@ -1,0 +1,29 @@
+---
+title: keep-warm
+description: Keep an idle session's prompt cache alive.
+sidebar:
+  order: 2
+---
+
+import KeepWarm from '../../../components/mgfx/KeepWarm.astro';
+
+Claude Code caches a conversation's prompt with a ~1-hour TTL. While a warmed session is idle,
+keep-warm replays its last request as a cheap **cache-read** (~0.1× context) every ~50 min — so the
+timer never expires and returning to the session stays cheap.
+
+<KeepWarm />
+
+```bash
+claudex keep-warm start                # start the proxy + wire ANTHROPIC_BASE_URL
+claudex keep-warm add <session|--last> # warm a session
+claudex keep-warm status               # (default) what's being warmed
+claudex keep-warm rm <session>         # stop warming one
+claudex keep-warm stop                 # restore settings.json
+```
+
+**Flags:** `target` (session id / id-prefix / project), `--last`, `--interval <MIN>` (default 50,
+max 55 — under the 60-min TTL), `--max <HRS>` (stop after N idle hours, default 8), `--no-wire`.
+
+**Note:** a session is only warmable *after* it routes through the proxy (the cacheable prefix lives
+in the live request, not on disk) — nothing is grabbed retroactively. Each warmed session stays on
+its own account. Mutually exclusive with **[pool](/pooling/overview/)**.

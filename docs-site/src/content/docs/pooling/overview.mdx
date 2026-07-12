@@ -1,0 +1,28 @@
+---
+title: Pooling overview
+description: One endpoint over many accounts, with auto-failover.
+sidebar:
+  order: 1
+---
+
+import Failover from '../../../components/mgfx/Failover.astro';
+
+Pooling routes Claude Code through a local `127.0.0.1` proxy that spreads traffic across accounts
+and fails over on rate limits — mid-conversation, no restart.
+
+<Failover />
+
+There are three flavors:
+
+- **[Local pool](/pooling/local/)** — pool *your own* accounts. Auto-failover on 429.
+- **[Shared pool (Pantry)](/pooling/shared/)** — pool with friends via a `clpool:` link; tokens
+  client-side encrypted; no server.
+- **[Backend pool (GCP)](/pooling/backend/)** — refresh tokens custodied server-side; a REST API
+  mints short-lived tokens and tracks per-member usage (the [dashboard](/api/overview/) view).
+
+All commands live under **[pool …](/pooling/commands/)**.
+
+:::caution[Modes]
+`--mode failover` (default) uses one account until it's rate-limited, then moves — preserving prompt
+caching. `--mode balance` spreads every turn (may be against Anthropic's terms; use deliberately).
+:::

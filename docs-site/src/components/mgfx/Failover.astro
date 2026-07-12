@@ -1,0 +1,37 @@
+---
+// Pool failover: requests flow through the local proxy to account A until it hits a
+// 429, then reroute to account B mid-conversation — no restart.
+const caption = 'On a rate-limit (429), the pool proxy reroutes to the next account instantly — mid-conversation.';
+---
+<figure class="mgfx">
+  <svg viewBox="0 0 520 220" role="img" aria-label="Pool failover on 429" style="width:100%;height:auto">
+    <style>
+      .box{fill:none;stroke:var(--sl-color-gray-5);stroke-width:1.5}
+      .t{fill:var(--sl-color-gray-3);font:600 11px ui-monospace,monospace}
+      .proxy{fill:color-mix(in srgb,var(--clay) 22%,transparent);stroke:var(--clay)}
+      .pkt{fill:var(--clay-lite)}
+      .a-on{animation:aon 6s linear infinite}
+      .b-on{animation:bon 6s linear infinite}
+      @keyframes aon{0%,45%{opacity:1}55%,100%{opacity:.25}}
+      @keyframes bon{0%,45%{opacity:.25}55%,100%{opacity:1}}
+      .flow{offset-path:path('M90 110 L200 110');animation:flow 1.4s linear infinite}
+      .re{opacity:0;animation:re 6s linear infinite}
+      @keyframes re{0%,46%{opacity:0}52%,60%{opacity:1}66%,100%{opacity:0}}
+      @keyframes flow{from{offset-distance:0%}to{offset-distance:100%}}
+    </style>
+    <text class="t" x="14" y="115">Claude Code</text>
+    <circle class="pkt flow" r="5" cx="0" cy="0"></circle>
+    <rect class="box proxy" x="200" y="86" width="90" height="48" rx="10"></rect>
+    <text class="t" x="214" y="114" style="fill:var(--clay)">pool proxy</text>
+
+    <g class="a-on"><rect class="box" x="360" y="40" width="140" height="40" rx="10"></rect>
+      <text class="t" x="374" y="64">account A</text></g>
+    <text class="t re" x="454" y="36" style="fill:var(--warn)">429</text>
+    <g class="b-on"><rect class="box" x="360" y="140" width="140" height="40" rx="10" style="stroke:var(--clay)"></rect>
+      <text class="t" x="374" y="164" style="fill:var(--clay)">account B ✓</text></g>
+
+    <path class="box" d="M290 104 L360 60" style="stroke-dasharray:4 4"></path>
+    <path class="box" d="M290 116 L360 160" style="stroke-dasharray:4 4;stroke:var(--clay)"></path>
+  </svg>
+  <figcaption>{caption}</figcaption>
+</figure>

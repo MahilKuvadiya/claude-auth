@@ -1,0 +1,29 @@
+---
+title: switch
+description: Flip the machine-wide login between saved accounts.
+sidebar:
+  order: 3
+---
+
+import Switch from '../../../components/mgfx/Switch.astro';
+
+Switches the machine-wide login to a saved account, swapping **both** the Keychain credential and
+the `~/.claude.json` identity atomically.
+
+<Switch />
+
+```bash
+claudex switch work        # switch to "work"
+claudex switch             # interactive picker
+claudex switch work -f     # switch even if already active
+claudex switch work --no-save   # don't refresh the outgoing account's stored copy first
+```
+
+- **Auto-sync on switch:** by default the outgoing account's stored copy is refreshed before you
+  leave it, so its token never goes stale (disable with `--no-save`).
+- Restart Claude Code (and running sessions) for the swap to take effect — running processes hold
+  the old in-memory token.
+- Touches the Keychain + local files; network only if a refresh is triggered.
+
+Need one session on a *different* account without changing the global login? Use
+**[session](/accounts/session/)**.

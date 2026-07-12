@@ -1,0 +1,38 @@
+---
+// The atomic two-part switch: Keychain credential + ~/.claude.json identity swap
+// together from "personal" to "work". Pure SVG + CSS keyframes.
+const caption = 'A switch swaps BOTH the Keychain credential and the identity file — atomically.';
+---
+<figure class="mgfx">
+  <svg viewBox="0 0 520 200" role="img" aria-label="Atomic account switch" style="width:100%;height:auto">
+    <style>
+      .lane{fill:none;stroke:var(--sl-color-gray-5);stroke-width:1.5;rx:10}
+      .lbl{fill:var(--sl-color-gray-3);font:600 11px ui-monospace,monospace}
+      .chip{rx:8}
+      .personal{fill:var(--clay-deep)}
+      .work{fill:var(--clay)}
+      .txt{fill:#fff;font:600 12px ui-sans-serif,system-ui}
+      .swap1{animation:swap 5s ease-in-out infinite}
+      .swap2{animation:swap 5s ease-in-out infinite}
+      @keyframes swap{0%,18%{transform:translateX(0)}32%,68%{transform:translateX(300px)}82%,100%{transform:translateX(0)}}
+      .check{opacity:0;animation:blip 5s ease-in-out infinite}
+      @keyframes blip{0%,34%{opacity:0}40%,64%{opacity:1}70%,100%{opacity:0}}
+    </style>
+    <text class="lbl" x="14" y="40">Keychain</text>
+    <rect class="lane" x="120" y="24" width="380" height="40"></rect>
+    <g class="swap1"><rect class="chip personal" x="128" y="30" width="120" height="28"></rect>
+      <text class="txt" x="150" y="49">token · personal</text></g>
+
+    <text class="lbl" x="14" y="128">~/.claude.json</text>
+    <rect class="lane" x="120" y="112" width="380" height="40"></rect>
+    <g class="swap2"><rect class="chip work" x="128" y="118" width="120" height="28" style="fill:var(--clay-deep)"></rect>
+      <text class="txt" x="146" y="137">identity · personal</text></g>
+
+    <g class="check">
+      <circle cx="470" cy="186" r="10" fill="var(--clay)"></circle>
+      <path d="M465 186 l4 4 l7 -8" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"></path>
+      <text class="lbl" x="300" y="191" style="fill:var(--clay)">switched to work ✓</text>
+    </g>
+  </svg>
+  <figcaption>{caption}</figcaption>
+</figure>

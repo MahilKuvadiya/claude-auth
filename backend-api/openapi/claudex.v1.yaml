@@ -1,0 +1,373 @@
+openapi: 3.1.0
+info:
+  title: claudex API
+  version: "1.0.0"
+  description: >
+    Unified REST API for claudex pools. Two planes share one service:
+    a **control plane** (dashboard/admin, authenticated by a Firebase ID token with an
+    `org_admin`/`pod_lead` custom claim) and a **data plane** (the CLI/proxy, authenticated
+    by a member JWT). Refresh tokens live only in Secret Manager and never appear in a response;
+    this service is the sole, serialized refresher of single-use rotating tokens.
+servers:
+  - url: https://claudex-api-<hash>-el.a.run.app
+    description: Cloud Run (asia-south1)
+  - url: http://localhost:8080
+    description: local
+
+tags:
+  - name: pools
+  - name: members
+  - name: usage
+  - name: join-links
+  - name: data-plane
+
+components:
+  securitySchemes:
+    firebaseIdToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Firebase ID token with an admin custom claim (control plane).
+    memberJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Member JWT carrying { poolId, memberId } (data plane).
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string, example: forbidden }
+            message: { type: string }
+            requestId: { type: string }
+            details: {}
+    Pool:
+      type: object
+      required: [id, name, mode, status]
+      properties:
+        id: { type: string, example: pl_1a2b3c4d5e }
+        name: { type: string }
+        mode: { type: string, enum: [failover, balance] }
+        status: { type: string, example: active }
+        orgId: { type: [string, "null"] }
+    TokenTally:
+      type: object
+      properties:
+        tokensIn: { type: number }
+        tokensOut: { type: number }
+        cacheRead: { type: number }
+        cacheWrite: { type: number }
+        requests: { type: number }
+    RateLimit:
+      type: [object, "null"]
+      properties:
+        fiveHourPct: { type: [number, "null"] }
+        weeklyPct: { type: [number, "null"] }
+    Member:
+      type: object
+      required: [memberId, name, status]
+      properties:
+        memberId: { type: string }
+        email: { type: [string, "null"] }
+        name: { type: string }
+        status: { type: string, enum: [active, resting, revoked] }
+        subscriptionType: { type: [string, "null"] }
+        rateLimit: { $ref: "#/components/schemas/RateLimit" }
+        consumed: { $ref: "#/components/schemas/TokenTally" }
+        contributed: { $ref: "#/components/schemas/TokenTally" }
+    MemberUsage:
+      type: object
+      properties:
+        memberId: { type: string }
+        email: { type: [string, "null"] }
+        name: { type: string }
+        subscriptionType: { type: [string, "null"] }
+        usage: { type: [object, "null"], description: raw Anthropic usage object }
+    Rollup:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string, description: "ISO date YYYY-MM-DD" }
+        tokensIn: { type: number }
+        tokensOut: { type: number }
+        cacheRead: { type: number }
+        cacheWrite: { type: number }
+        requests: { type: number }
+        byMember:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              consumed: { $ref: "#/components/schemas/TokenTally" }
+              contributed: { $ref: "#/components/schemas/TokenTally" }
+    JoinLink:
+      type: object
+      required: [joinToken, targetEmail, command]
+      properties:
+        joinToken: { type: string }
+        targetEmail: { type: string }
+        role: { type: string }
+        used: { type: boolean }
+        memberId: { type: [string, "null"] }
+        expiresAt: { type: [number, "null"] }
+        command: { type: string }
+  responses:
+    Unauthorized:
+      description: missing or invalid credentials
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: authenticated but not allowed
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: resource not found
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+paths:
+  /v1/pools:
+    get:
+      tags: [pools]
+      summary: List pools in the caller's org
+      security: [{ firebaseIdToken: [] }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { pools: { type: array, items: { $ref: "#/components/schemas/Pool" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [pools]
+      summary: Create a pool
+      security: [{ firebaseIdToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 80 }
+                mode: { type: string, enum: [failover, balance] }
+      responses:
+        "201":
+          description: created
+          content: { application/json: { schema: { $ref: "#/components/schemas/Pool" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/pools/{id}:
+    get:
+      tags: [pools]
+      summary: Get a pool
+      security: [{ firebaseIdToken: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Pool" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/pools/{id}/members:
+    get:
+      tags: [members]
+      summary: List members with token tallies (no secrets)
+      description: Accepts either a member JWT (for its own pool) or a Firebase admin token.
+      security: [{ memberJwt: [] }, { firebaseIdToken: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { members: { type: array, items: { $ref: "#/components/schemas/Member" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /v1/pools/{id}/members/{mid}:
+    delete:
+      tags: [members]
+      summary: Revoke a member (destroy secret + tombstone)
+      security: [{ firebaseIdToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: mid, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { memberId: { type: string }, status: { type: string, enum: [revoked] } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/pools/{id}/usage:
+    get:
+      tags: [usage]
+      summary: Live Anthropic rate-limit headroom per member
+      security: [{ memberJwt: [] }, { firebaseIdToken: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { members: { type: array, items: { $ref: "#/components/schemas/MemberUsage" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/pools/{id}/rollups:
+    get:
+      tags: [usage]
+      summary: Daily usage rollups
+      security: [{ firebaseIdToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 14 } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { rollups: { type: array, items: { $ref: "#/components/schemas/Rollup" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/pools/{id}/join-links:
+    get:
+      tags: [join-links]
+      summary: List a pool's join links (+ openCount)
+      security: [{ firebaseIdToken: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  links: { type: array, items: { $ref: "#/components/schemas/JoinLink" } }
+                  openCount: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [join-links]
+      summary: Generate a targeted, single-use join link
+      security: [{ firebaseIdToken: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                role: { type: string }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  joinToken: { type: string }
+                  targetEmail: { type: string }
+                  command: { type: string }
+                  expiresAt: { type: number }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/pools/join:
+    post:
+      tags: [data-plane]
+      summary: Contribute a seat via a targeted join link (the token is the credential)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [joinToken, email, refreshToken]
+              properties:
+                joinToken: { type: string }
+                email: { type: string, format: email }
+                accountUuid: { type: [string, "null"] }
+                refreshToken: { type: string }
+      responses:
+        "200":
+          description: joined
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  poolId: { type: string }
+                  memberId: { type: string }
+                  memberToken: { type: string }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: link already used, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "410": { description: link expired, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /v1/pools/{id}/token:
+    get:
+      tags: [data-plane]
+      summary: Mint a short-lived access token for a member (sole refresher)
+      security: [{ memberJwt: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: serve, in: query, schema: { type: string }, description: member id to serve (default self) }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken: { type: string }
+                  expiresAt: { type: number }
+                  servingMemberId: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/telemetry:
+    post:
+      tags: [data-plane]
+      summary: Ingest per-request usage events
+      security: [{ memberJwt: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                events:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      servingMemberId: { type: string }
+                      requests: { type: number }
+                      inputTokens: { type: number }
+                      outputTokens: { type: number }
+                      cacheReadTokens: { type: number }
+                      cacheWriteTokens: { type: number }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean }, ingested: { type: integer } }
+        "401": { $ref: "#/components/responses/Unauthorized" }

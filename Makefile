@@ -3,6 +3,7 @@
 BIN := bin/claudex
 DIST := dist
 ARCH := $(shell uname -m)
+VER := $(shell grep -m1 '__version__' $(BIN) | sed -E 's/.*"([0-9.]+)".*/\1/')
 
 all: check test lint
 
@@ -12,8 +13,11 @@ check:
 
 ## build: compile the single-file source into a native binary via Nuitka (arm64)
 ##        Produces $(DIST)/claudex — machine code, no readable .py/.pyc inside.
+##        The onefile payload is extracted ONCE to a version-keyed cache dir and
+##        reused, so startup is ~0.1s after the first run (not ~3s every run).
 build: check
 	python3 -m nuitka --onefile --assume-yes-for-downloads --static-libpython=no \
+		--product-version="$(VER)" --onefile-tempdir-spec='{CACHE_DIR}/claudex/{VERSION}' \
 		--output-dir=$(DIST) --output-filename=claudex --remove-output $(BIN)
 	@$(MAKE) sign
 

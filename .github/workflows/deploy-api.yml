@@ -1,0 +1,62 @@
+name: api
+
+# Build/test the unified REST API, and deploy it to Cloud Run on merge to main.
+# Separate from the Python CLI CI. Keyless auth via the existing WIF pool.
+on:
+  push:
+    branches: [main]
+    paths: ["backend-api/**", ".github/workflows/deploy-api.yml"]
+  pull_request:
+    paths: ["backend-api/**", ".github/workflows/deploy-api.yml"]
+
+defaults:
+  run:
+    working-directory: backend-api
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: "npm", cache-dependency-path: backend-api/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test          # unit + contract (no external deps)
+
+      # Firestore-emulator integration (Secret Manager + Anthropic are module-mocked)
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - run: npm i -g firebase-tools
+      - run: npm run test:emulator
+        env:
+          GCP_PROJECT: yash-test-495112
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write          # keyless Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/632653045864/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          # NOTE: provision this deployer SA + roles (run.admin, iam.serviceAccountUser,
+          # cloudbuild.builds.editor, artifactregistry.writer) and grant it WIF impersonation
+          # before the first deploy. See backend-api/DEPLOY.md.
+          service_account: claudex-deployer@yash-test-495112.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy claudex-api \
+            --source . \
+            --project yash-test-495112 \
+            --region asia-south1 \
+            --allow-unauthenticated \
+            --service-account claudex-api@yash-test-495112.iam.gserviceaccount.com \
+            --set-env-vars "GCP_PROJECT=yash-test-495112,FIRESTORE_DB=claude-pool,KMS_LOCATION=asia-south1,USAGE_TOPIC=claude-pool-usage,DASHBOARD_ORIGIN=${{ vars.DASHBOARD_ORIGIN }}" \
+            --min-instances 0 --max-instances 4 --cpu 1 --memory 512Mi --timeout 60

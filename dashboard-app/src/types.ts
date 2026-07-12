@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-// Validated at every Firestore/API boundary — no `any` reaches the UI.
+// Validated at the API boundary — no `any` reaches the UI. Shapes mirror
+// backend-api/openapi/claudex.v1.yaml.
 export const Pool = z.object({
   id: z.string(),
   name: z.string(),
@@ -10,21 +11,7 @@ export const Pool = z.object({
 });
 export type Pool = z.infer<typeof Pool>;
 
-export const Member = z.object({
-  id: z.string(),
-  email: z.string().optional(),
-  status: z.enum(['active', 'resting', 'revoked']).catch('active'),
-  accountUuid: z.string().nullable().optional(),
-  rateLimit: z
-    .object({ fiveHourPct: z.number().nullable(), weeklyPct: z.number().nullable() })
-    .partial()
-    .nullable()
-    .optional(),
-  lastServedAt: z.number().nullable().optional(),
-});
-export type Member = z.infer<typeof Member>;
-
-const TokenTally = z.object({
+export const TokenTally = z.object({
   tokensIn: z.number().default(0),
   tokensOut: z.number().default(0),
   cacheRead: z.number().default(0),
@@ -32,6 +19,22 @@ const TokenTally = z.object({
   requests: z.number().default(0),
 }).partial();
 export type TokenTally = z.infer<typeof TokenTally>;
+
+export const Member = z.object({
+  memberId: z.string(),
+  email: z.string().nullable().optional(),
+  name: z.string().optional(),
+  status: z.enum(['active', 'resting', 'revoked']).catch('active'),
+  subscriptionType: z.string().nullable().optional(),
+  rateLimit: z
+    .object({ fiveHourPct: z.number().nullable(), weeklyPct: z.number().nullable() })
+    .partial()
+    .nullable()
+    .optional(),
+  consumed: TokenTally.optional(),
+  contributed: TokenTally.optional(),
+});
+export type Member = z.infer<typeof Member>;
 
 export const Rollup = z.object({
   id: z.string(), // period, e.g. 2026-07-11

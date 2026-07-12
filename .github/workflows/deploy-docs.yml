@@ -1,0 +1,41 @@
+name: docs
+
+# Build + deploy the gated docs site to Cloud Run on merge to main.
+on:
+  push:
+    branches: [main]
+    paths: ["docs-site/**", "backend-api/openapi/**", ".github/workflows/deploy-docs.yml"]
+
+defaults:
+  run:
+    working-directory: docs-site
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: "npm", cache-dependency-path: docs-site/package-lock.json }
+      - run: npm ci
+      - run: npm run build          # fail the deploy if the docs don't build
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/632653045864/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: claudex-deployer@yash-test-495112.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy docs to Cloud Run
+        # Currently PUBLIC (user choice). To gate to @devxlabs.ai instead, swap to
+        # --no-allow-unauthenticated --ingress internal-and-cloud-load-balancing and
+        # stand up the IAP + LB per docs-site/DEPLOY-DOCS.md.
+        run: |
+          gcloud run deploy claudex-docs \
+            --source . \
+            --project yash-test-495112 \
+            --region asia-south1 \
+            --allow-unauthenticated \
+            --min-instances 0 --max-instances 2 --cpu 1 --memory 256Mi

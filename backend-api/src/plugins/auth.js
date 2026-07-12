@@ -1,0 +1,48 @@
+// Auth strategies as plain preHandler functions (used per route group — nothing is
+// unauthenticated by omission). They attach req.actor / req.member or throw a typed error.
+import { firebaseAuth } from '../lib/clients.js';
+import { verifyMemberToken } from '../lib/jwt.js';
+
+function httpError(statusCode, code, message) {
+  return Object.assign(new Error(message), { statusCode, code });
+}
+function bearer(req) {
+  return (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+}
+
+/** Control-plane: Firebase ID token with an admin custom claim. Sets req.actor. */
+export async function authFirebase(req) {
+  const idToken = bearer(req);
+  if (!idToken) throw httpError(401, 'unauthenticated', 'sign-in required');
+  let decoded;
+  try { decoded = await firebaseAuth.verifyIdToken(idToken); }
+  catch { throw httpError(401, 'unauthenticated', 'invalid or expired session'); }
+  if (decoded.role !== 'org_admin' && decoded.role !== 'pod_lead')
+    throw httpError(403, 'forbidden', 'admin access required');
+  req.actor = { uid: decoded.uid, email: decoded.email, role: decoded.role, orgId: decoded.orgId || null };
+}
+
+/** Data-plane: member HS256 JWT. Sets req.member = { poolId, memberId }. */
+export async function authMember(req) {
+  const token = bearer(req);
+  if (!token) throw httpError(401, 'unauthenticated', 'member token required');
+  try { req.member = await verifyMemberToken(token); }
+  catch { throw httpError(401, 'unauthenticated', 'invalid member token'); }
+}
+
+/** Shared read (roster): accept either a member JWT or a Firebase admin token. */
+export async function authMemberOrFirebase(req) {
+  const token = bearer(req);
+  if (!token) throw httpError(401, 'unauthenticated', 'authorization required');
+  try { req.member = await verifyMemberToken(token); return; } catch { /* try firebase */ }
+  await authFirebase(req);
+}
+
+/**
+ * Enforce that a member token may only act on its own pool. Call inside data-plane
+ * handlers after authMember when the pool id is in the path.
+ */
+export function assertPoolScope(req, poolIdFromPath) {
+  if (req.member && req.member.poolId !== poolIdFromPath)
+    throw httpError(403, 'forbidden', 'token is scoped to a different pool');
+}

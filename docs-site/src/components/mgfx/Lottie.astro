@@ -1,0 +1,22 @@
+---
+// Lottie player for designed motion-graphic assets. Drop a .lottie/.json into
+// public/anim/ and reference it: <Lottie src="/anim/hero.lottie" caption="…" />.
+// Falls back gracefully (nothing) if the asset is absent.
+interface Props { src: string; caption?: string; height?: number }
+const { src, caption, height = 260 } = Astro.props;
+const id = 'lottie-' + Math.random().toString(36).slice(2);
+---
+<figure class="mgfx">
+  <canvas id={id} data-src={src} style={`width:100%;height:${height}px;display:block`}></canvas>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+<script>
+  import { DotLottie } from '@lottiefiles/dotlottie-web';
+  for (const canvas of document.querySelectorAll<HTMLCanvasElement>('canvas[data-src]')) {
+    const src = canvas.dataset.src!;
+    // Only mount if the asset actually exists (designed Lottie is optional).
+    fetch(src, { method: 'HEAD' }).then((r) => {
+      if (r.ok) new DotLottie({ canvas, src, loop: true, autoplay: true });
+    }).catch(() => {});
+  }
+</script>

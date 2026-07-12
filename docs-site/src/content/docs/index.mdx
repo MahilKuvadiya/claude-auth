@@ -1,0 +1,42 @@
+---
+title: What is claudex
+description: Switch, pool, warm, and track multiple Claude Code accounts on one Mac.
+---
+
+import Lottie from '../../components/mgfx/Lottie.astro';
+import Switch from '../../components/mgfx/Switch.astro';
+
+**claudex** manages multiple Claude Code accounts on one Mac — like `gh auth switch`, but for
+Claude Code. Save each account once, then flip between them instantly; pool them behind one
+auto-failover proxy; keep an idle session's prompt cache warm; and track rate-limit usage across
+all of them — without ever logging out and back in.
+
+<Lottie src="/anim/hero.lottie" caption="claudex at a glance" height={280} />
+
+## Why it exists
+
+A Claude Code login isn't one token in one place. It's split across **two** locations:
+
+| What | Where | Contains |
+|------|-------|----------|
+| **Secrets** | macOS Keychain (`Claude Code-credentials`) | OAuth access/refresh tokens |
+| **Identity** | `~/.claude.json` → `oauthAccount` | email, organization, account UUID |
+
+Swapping only the token leaves the app convinced it's still the old account. A correct switch swaps
+**both, atomically** — which is exactly what claudex does.
+
+<Switch />
+
+## The feature map
+
+- **[Accounts](/accounts/switch/)** — save, switch, pin-per-session, rename, remove.
+- **[Usage & rate limits](/usage/usage/)** — see every account's plan tier and headroom without switching.
+- **[Autoswitch](/autoswitch/autoswitch/)** — hop to a fresher account when one gets rate-limited.
+- **[Pooling](/pooling/overview/)** — route through a local proxy that fails over across accounts.
+- **[Keep-warm](/sessions/keep-warm/)** — hold an idle session's prompt cache alive.
+- **[API](/api/overview/)** — the REST API powering pooling + the dashboard.
+
+:::note[Animations]
+Explainers on this site are motion-graphic. Designed Lottie assets drop into `public/anim/`; where one
+isn't present yet, a hand-built SVG explainer plays instead.
+:::

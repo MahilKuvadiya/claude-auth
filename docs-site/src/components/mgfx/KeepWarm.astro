@@ -1,0 +1,26 @@
+---
+// Keep-warm: a session's prompt cache has a ~1h TTL. Every ~50 min the proxy replays
+// the last request as a cheap cache-read, resetting the timer so returning stays cheap.
+const caption = 'A cheap cache-read every ~50 min resets the 1-hour prompt-cache TTL — so returning to the session is ~0.1× cost.';
+---
+<figure class="mgfx">
+  <svg viewBox="0 0 520 170" role="img" aria-label="Keep-warm cache TTL reset" style="width:100%;height:auto">
+    <style>
+      .track{fill:var(--sl-color-gray-5)}
+      .fill{fill:var(--clay);animation:drain 4s ease-in-out infinite}
+      @keyframes drain{0%{width:360px}70%{width:70px}72%{width:360px}100%{width:340px}}
+      .t{fill:var(--sl-color-gray-3);font:600 11px ui-monospace,monospace}
+      .ping{opacity:0;animation:ping 4s ease-in-out infinite}
+      @keyframes ping{0%,66%{opacity:0}72%,84%{opacity:1}90%,100%{opacity:0}}
+    </style>
+    <text class="t" x="14" y="54">prompt cache TTL</text>
+    <rect class="track" x="140" y="42" width="360" height="18" rx="9"></rect>
+    <rect class="fill" x="140" y="42" height="18" rx="9"></rect>
+    <g class="ping">
+      <circle cx="500" cy="110" r="9" fill="var(--clay)"></circle>
+      <text class="t" x="250" y="115" style="fill:var(--clay)">↺ replay last request → cache-read → TTL reset</text>
+    </g>
+    <text class="t" x="140" y="150">warmed session stays on its own account · stops after 8h idle</text>
+  </svg>
+  <figcaption>{caption}</figcaption>
+</figure>
