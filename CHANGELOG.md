@@ -4,6 +4,17 @@ All notable changes are documented here. This file is maintained automatically b
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit
 messages; the entry below the header is the pre-automation baseline.
 
+## [2.0.0](https://github.com/vishalmakwana111/claudex/compare/v1.16.0...v2.0.0) (2026-07-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* Homebrew and raw-GitHub-source installs no longer work. Install via `curl -fsSL https://storage.googleapis.com/claudex-dist/install.sh | bash`. Apple Silicon (arm64) only.
+
+### Features
+
+* distribute as a compiled binary from a public GCS bucket ([#20](https://github.com/vishalmakwana111/claudex/issues/20)) ([c2e6f52](https://github.com/vishalmakwana111/claudex/commit/c2e6f528fa2c7e81d18d243b91e7dd08f3f5238b))
+
 ## [1.16.0](https://github.com/vishalmakwana111/claudex/compare/v1.15.0...v1.16.0) (2026-07-11)
 
 
