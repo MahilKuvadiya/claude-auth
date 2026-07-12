@@ -1,3 +1,10 @@
+> ## ⛔ PARKED — do not use (as of the private-repo move)
+> claudex is now distributed as a **compiled binary from a public GCS bucket**
+> (`curl -fsSL https://storage.googleapis.com/claudex-dist/install.sh | bash`), and its
+> **source repository is private**. Homebrew-core requires a *public* repo that builds from
+> *source*, so this route is not available. This kit is kept only as a reference in case the
+> project ever goes public again. The `homebrew-claudex` tap is likewise retired.
+
 # Submitting `claudex` to homebrew-core
 
 Goal: get `brew install claudex` (no tap, for everyone) by adding the formula to

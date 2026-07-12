@@ -91,8 +91,10 @@ CLAUDEX_BACKEND = {
 }
 
 REPO = "github.com/vishalmakwana111/claudex"
-# Raw URL of the canonical script on the default branch — used by `update`.
-RAW_SCRIPT_URL = "https://raw.githubusercontent.com/vishalmakwana111/claudex/main/bin/claudex"
+# Public distribution bucket (compiled binaries live here; source repo is private).
+# `update` fetches the VERSION marker and the arch binary + checksum from this base.
+DIST_BASE = os.environ.get("CLAUDEX_DIST_BASE", "https://storage.googleapis.com/claudex-dist")
+DIST_ARCH = "claudex-arm64"  # Apple Silicon only — see install.sh for the Intel guard.
 
 # ───────────────────────────── theme ──────────────────────────────────────
 
@@ -3591,19 +3593,35 @@ def _version_tuple(s):
         parts.append(int(digits) if digits else 0)
     return tuple(parts) or (0,)
 
-def fetch_remote_script(timeout=10):
-    """Download the latest bin/claudex from GitHub. Returns (text, err)."""
-    req = urllib.request.Request(RAW_SCRIPT_URL, headers={
+def _dist_get(path, timeout=10):
+    """GET an object from the public distribution bucket. Returns (bytes, err)."""
+    url = f"{DIST_BASE}/{path.lstrip('/')}"
+    req = urllib.request.Request(url, headers={
         "User-Agent": f"claudex/{__version__}",
         "Cache-Control": "no-cache",
     })
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read().decode("utf-8"), None
+            return r.read(), None
     except urllib.error.HTTPError as e:
         return None, f"http {e.code}"
     except Exception as e:
         return None, str(e).split("]")[-1].strip()[:50] or "network error"
+
+def fetch_remote_version(timeout=10):
+    """Read the published VERSION marker from the dist bucket. Returns (ver, err)."""
+    data, err = _dist_get("VERSION", timeout=timeout)
+    if err:
+        return None, err
+    return data.decode("utf-8").strip().lstrip("v") or None, None
+
+def _sha256_for(sums_text, filename):
+    """Pull the expected sha256 of `filename` out of a SHA256SUMS body."""
+    for line in (sums_text or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and os.path.basename(parts[-1]) == filename:
+            return parts[0].lower()
+    return None
 
 _VERSION_RE = re.compile(r'''^__version__\s*=\s*["']([^"']+)["']''', re.M)
 
@@ -3613,39 +3631,32 @@ def parse_script_version(text):
     return m.group(1) if m else None
 
 def _self_path():
-    """Absolute path of the running claudex script (symlinks resolved)."""
-    return os.path.realpath(os.path.abspath(__file__))
+    """Absolute path of the running claudex binary (symlinks resolved)."""
+    return os.path.realpath(os.path.abspath(sys.argv[0] if _is_compiled() else __file__))
 
-def _is_brew_install():
-    """True if the running script lives under a Homebrew prefix (managed by brew,
-    so self-update would corrupt brew's bookkeeping / hit a read-only Cellar)."""
-    p = _self_path()
-    prefix = os.environ.get("HOMEBREW_PREFIX", "")
-    return ("/Cellar/" in p
-            or "/opt/homebrew/" in p
-            or p.startswith("/usr/local/Cellar")
-            or bool(prefix and p.startswith(prefix)))
+def _is_compiled():
+    """True when running as the Nuitka-compiled binary (vs. the raw .py source)."""
+    return "__compiled__" in globals()
 
 def cmd_update(args):
-    """Download the latest script from GitHub and replace this file in place."""
+    """Download the latest compiled binary from the dist bucket and replace this
+    executable in place, after verifying its SHA256."""
     info()
     info(IND + bold(clay("Update")) + dim("   ·   " + REPO))
     info()
 
-    # Homebrew manages its own copy in a read-only Cellar — never self-overwrite it.
-    if _is_brew_install():
-        info(IND + yellow("●") + " installed via Homebrew — update with " +
-             clay("brew upgrade claudex"))
-        info(IND * 2 + dim("(self-update is disabled for brew installs so brew stays authoritative)"))
+    # Running from source (development) — there's no binary to swap; use git.
+    if not _is_compiled():
+        info(IND + yellow("●") + " running from source — update with " + clay("git pull"))
+        info(IND * 2 + dim("(self-update only applies to the compiled binary)"))
         info()
         return
 
-    text, err = fetch_remote_script()
+    remote, err = fetch_remote_version()
     if err:
-        die(f"couldn't reach GitHub: {err}")
-    remote = parse_script_version(text)
+        die(f"couldn't reach the update server: {err}")
     if not remote:
-        die("couldn't read the version of the downloaded script — aborting")
+        die("couldn't read the published version — aborting")
     local = __version__
     newer = _version_tuple(remote) > _version_tuple(local)
     same  = _version_tuple(remote) == _version_tuple(local)
@@ -3659,7 +3670,7 @@ def cmd_update(args):
         elif same:
             ok(f"up to date  (v{local})")
         else:
-            ok(f"you're ahead of GitHub  (local v{local} · remote v{remote})")
+            ok(f"you're ahead of the server  (local v{local} · published v{remote})")
         info()
         return
 
@@ -3669,29 +3680,41 @@ def cmd_update(args):
         info()
         return
     if not newer and not same and not args.force:
-        warn(f"local v{local} is newer than GitHub v{remote} — nothing to do")
-        hint("pass " + clay("--force") + " to overwrite with the GitHub version")
+        warn(f"local v{local} is newer than the server v{remote} — nothing to do")
+        hint("pass " + clay("--force") + " to reinstall the published version")
         info()
         return
 
-    # Never overwrite ourselves with something that isn't valid Python.
-    try:
-        compile(text, "<remote claudex>", "exec")
-    except SyntaxError as e:
-        die(f"downloaded script failed to parse ({e}) — refusing to install")
+    # Fetch the binary + its checksum, then verify BEFORE touching the running file.
+    binary, err = _dist_get(f"latest/{DIST_ARCH}", timeout=60)
+    if err:
+        die(f"couldn't download the binary: {err}")
+    sums, err = _dist_get("latest/SHA256SUMS")
+    if err:
+        die(f"couldn't download the checksum: {err}")
+    expected = _sha256_for(sums.decode("utf-8", "replace"), DIST_ARCH)
+    if not expected:
+        die(f"no checksum for {DIST_ARCH} in SHA256SUMS — refusing to install")
+    actual = hashlib.sha256(binary).hexdigest()
+    if actual != expected:
+        die("checksum mismatch — refusing to install\n" +
+            IND + dim(f"expected {expected[:16]}… · got {actual[:16]}…"))
 
     target = _self_path()
     tmp = target + ".update.tmp"
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(text)
+        with open(tmp, "wb") as f:
+            f.write(binary)
         os.chmod(tmp, 0o755)
+        # Strip the download-quarantine so Gatekeeper stays silent (best effort).
+        subprocess.run(["xattr", "-d", "com.apple.quarantine", tmp],
+                       capture_output=True)
         os.replace(tmp, target)  # atomic on the same filesystem
     except PermissionError:
         try: os.remove(tmp)
         except OSError: pass
         die(f"no write permission for {target}\n" +
-            IND + dim("re-run ") + clay("./install.sh") + dim(" from the repo, or use sudo"))
+            IND + dim("re-run the installer, or use sudo"))
     except Exception as e:
         try: os.remove(tmp)
         except OSError: pass
@@ -3735,13 +3758,12 @@ def cmd_doctor(args):
           capath or "not found — hooks/statusline may fail")
 
     # latest version (best-effort — skipped silently when offline)
-    rtext, rerr = fetch_remote_script(timeout=5)
-    if not rerr:
-        remote = parse_script_version(rtext)
-        if remote and _version_tuple(remote) > _version_tuple(__version__):
+    remote, rerr = fetch_remote_version(timeout=5)
+    if not rerr and remote:
+        if _version_tuple(remote) > _version_tuple(__version__):
             check("warn", "version",
                   f"v{__version__} — update available (v{remote}): run `claudex update`")
-        elif remote:
+        else:
             check("ok", "version", f"v{__version__} (latest)")
 
     # keychain access

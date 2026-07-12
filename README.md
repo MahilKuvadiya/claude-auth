@@ -2,9 +2,8 @@
 
 > Switch between multiple Claude Code accounts on one Mac — like `gh auth switch`, but for Claude Code.
 
-[![CI](https://github.com/vishalmakwana111/claudex/actions/workflows/ci.yml/badge.svg)](https://github.com/vishalmakwana111/claudex/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/vishalmakwana111/claudex?sort=semver)](https://github.com/vishalmakwana111/claudex/releases)
-[![Homebrew](https://img.shields.io/badge/homebrew-claudex-blue)](https://github.com/vishalmakwana111/homebrew-claudex)
+![Platform: macOS](https://img.shields.io/badge/platform-macOS-black.svg)
+![Apple Silicon](https://img.shields.io/badge/arch-Apple%20Silicon%20(arm64)-black.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 If you juggle more than one Claude Code login (personal, work, a client's org…), you know the pain: there's no built-in account switcher, so you end up logging out and back in every time. `claudex` fixes that. Save each account once, then flip between them instantly — and pool, warm, and track usage across all of them.
@@ -60,52 +59,39 @@ Swapping just the token leaves the app convinced it's still the old account (wro
 - 📊 **Cross-account usage** — see every account's plan tier and rate-limit headroom without switching.
 - ⚖️ **Pool & failover** — route through a local proxy that switches accounts mid-conversation, no restart.
 - 🔥 **Keep-warm** — hold a specific idle session's prompt cache alive so returning is cheap.
-- 📦 **Zero dependencies.** One self-contained Python 3 file (stdlib only). Nothing to `pip install`.
+- 📦 **Zero dependencies.** Ships as one self-contained native binary — nothing to install, no runtime to manage. (Built from a single stdlib-only Python 3 source file.)
 
 ## Requirements
 
-- **macOS** (uses the login Keychain via the `security` CLI)
-- **Python 3** (ships with macOS / Xcode Command Line Tools)
+- **macOS on Apple Silicon (arm64)** — uses the login Keychain via the `security` CLI. There is no Intel (x86_64) build.
 - **Claude Code** installed and on your `PATH` (only needed for the `login` command)
 
 ## Install
 
-**Homebrew** (recommended):
+One command — nothing else to set up:
 
 ```bash
-brew tap vishalmakwana111/claudex   # one time
-brew install claudex
+curl -fsSL https://storage.googleapis.com/claudex-dist/install.sh | bash
 ```
 
-**From source:**
+This downloads the `claudex` binary, **verifies its SHA256 checksum**, installs it to `~/.local/bin/claudex`, and clears the download quarantine so macOS runs it without a Gatekeeper prompt. No GitHub account, login, or token required.
+
+> `claudex` ships as a compiled binary — the source lives in a private repository and is never distributed. On an Intel Mac the installer prints a clear "no Intel build available" message and stops.
+
+Pin a specific version:
 
 ```bash
-git clone https://github.com/vishalmakwana111/claudex.git
-cd claudex
-./install.sh
+curl -fsSL https://storage.googleapis.com/claudex-dist/install.sh | CLAUDEX_VERSION=v1.16.0 bash
 ```
 
-The installer copies the script to `~/.local/bin/claudex` and checks that directory is on your `PATH`.
-
-<details>
-<summary>Manual install</summary>
+Update in place any time:
 
 ```bash
-cp bin/claudex ~/.local/bin/claudex
-chmod +x ~/.local/bin/claudex
-# ensure ~/.local/bin is on PATH:
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
-```
-</details>
-
-Once installed, update in place — no re-clone:
-
-```bash
-claudex update          # download the latest and replace itself
+claudex update          # download + checksum-verify the latest, then replace itself
 claudex update --check  # just tell me if a newer version exists
 ```
 
-`update` fetches the latest `bin/claudex` from GitHub, verifies it parses as valid Python, then atomically swaps it over the running file. Your saved accounts are untouched. See [COMMANDS.md → update](COMMANDS.md#update).
+`update` fetches the latest published binary, verifies its SHA256 against `SHA256SUMS`, and only then atomically swaps it over the running file. It refuses to install on a checksum mismatch, and your saved accounts are untouched. See [COMMANDS.md → update](COMMANDS.md#update).
 
 ## Quick start
 

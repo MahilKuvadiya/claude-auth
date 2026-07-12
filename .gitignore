@@ -5,6 +5,9 @@
 __pycache__/
 *.py[cod]
 
+# Build output (Nuitka-compiled binary + checksums — produced by `make dist`)
+dist/
+
 # Local account data (should NEVER be committed — lives in the user's home dir,
 # but listed here as a guard in case anyone copies it into the repo)
 .claude-accounts/

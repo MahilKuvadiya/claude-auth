@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: ShellCheck install scripts
-        run: shellcheck install.sh uninstall.sh
+        run: shellcheck install.sh uninstall.sh packaging/install.sh
 
   pr-title:
     # release-please derives the version bump from the (squash-merged) PR title,

@@ -3,21 +3,27 @@
 Thanks for helping out! A few things make this project unusual — please read the first
 section before you touch the code.
 
-## ⚠️ It's one file, on purpose
+## ⚠️ One-file *source*, compiled binary *release*
 
-The entire tool is a single, zero-dependency Python 3 script: **`bin/claudex`**. This is a
-hard design constraint, not an accident:
+The entire tool is a single, stdlib-only Python 3 script: **`bin/claudex`**. You develop in
+that one file — no package layout, no second importable module, no third-party runtime deps.
 
-- `install.sh` copies that one file to `~/.local/bin/claudex`.
-- `claudex update` downloads that one raw file from `main` and atomically replaces itself.
-- The Homebrew formula installs that one file.
+> **This reverses the old rule.** Earlier, `bin/claudex` was *also* the shipped artifact:
+> `install.sh` copied the raw `.py`, `claudex update` fetched it from GitHub, and Homebrew
+> installed it. That is no longer true. The source repository is **private**, and releases now
+> ship a **compiled native binary** (via Nuitka) so the source is never distributed.
 
-**Do not split it into modules, add a package layout, or introduce a build/bundling step.**
-Doing so breaks the self-updater and the Homebrew formula. Keep it stdlib-only — no
-third-party runtime dependencies (`pip install` must never be required to run it).
+What this means in practice:
 
-Internal organization within the file is welcome (clear sections, helpers); a second
-importable module is not.
+- Keep `bin/claudex` a **single stdlib-only file** — Nuitka compiles it as one entry point, and
+  `pip install` must never be required to *run* the release. (Nuitka itself is a build-time-only
+  tool; it does not become a runtime dependency.)
+- The build is `make dist` → `dist/claudex` (arm64, ad-hoc signed) + `dist/SHA256SUMS`. CI runs
+  this on a macOS runner at release time and uploads to the public GCS bucket.
+- Distribution is the public **GCS bucket** (`gs://claudex-dist`), not Homebrew or a raw GitHub
+  file. The bootstrap installer is `packaging/install.sh` (served as the bucket's `install.sh`).
+- `claudex update` downloads the latest **binary** + `SHA256SUMS`, verifies the checksum, and
+  replaces the running binary. When run from source it no-ops and tells you to `git pull`.
 
 ## Commit messages & PRs (this drives releases)
 
@@ -38,10 +44,12 @@ annotated `# x-release-please-version`) and updates `CHANGELOG.md` in its Releas
 ## Development
 
 ```bash
-make check   # python3 -m py_compile bin/claudex  (the same gate `update` uses)
+make check   # python3 -m py_compile bin/claudex  (syntax gate the build runs first)
 make test    # python3 -m unittest discover -s tests
-make lint    # shellcheck install.sh uninstall.sh
-make install # ./install.sh  (into ~/.local/bin)
+make lint    # shellcheck install.sh uninstall.sh packaging/install.sh
+make build   # compile the native binary with Nuitka → dist/claudex (arm64, needs Nuitka)
+make dist    # build + emit dist/SHA256SUMS (what CI uploads)
+make install # ./install.sh  (installs the .py source into ~/.local/bin for dev)
 ```
 
 Tests live in `tests/` and use only the stdlib `unittest`. They load `bin/claudex` as a
@@ -54,5 +62,8 @@ that logic. Keychain- and network-touching code is verified by hand (documented 
 
 1. Merge feature PRs to `main` (Conventional-Commit titles). release-please keeps a rolling
    **"Release vX.Y.Z"** PR up to date.
-2. Merge that Release PR. That tags `vX.Y.Z`, publishes a GitHub Release (with `bin/claudex`
-   attached), bumps the `homebrew-claudex` formula, and redeploys the showcase.
+2. Merge that Release PR. That tags `vX.Y.Z` and triggers the `publish` job on a macOS/arm64
+   runner: it compiles + ad-hoc-signs the binary, generates `SHA256SUMS`, authenticates to GCP
+   via keyless Workload Identity Federation, and uploads the binary + checksum + `VERSION` +
+   `install.sh` to `gs://claudex-dist` (both `v<tag>/` and rolling `latest/`). The
+   `curl … | bash` installer serves the new version immediately.

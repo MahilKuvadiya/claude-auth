@@ -11,36 +11,75 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - id: release
         uses: googleapis/release-please-action@v4
         with:
-          # A PAT (not the default GITHUB_TOKEN) so the Release PR triggers CI
-          # and the release event can fan out to the Homebrew tap.
+          # A PAT (not the default GITHUB_TOKEN) so the Release PR triggers CI.
           token: ${{ secrets.RELEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # Everything below runs only when a Release PR is merged (a real release).
+  # Compile the private source into a native binary and publish it to the public
+  # GCS bucket. Runs only when a Release PR is merged (a real release).
+  publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: macos-14          # Apple Silicon (arm64) — sets the binary's macOS floor
+    permissions:
+      contents: read
+      id-token: write          # required for keyless Workload Identity Federation
+    steps:
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.release_created }}
 
-      - name: Attach the single-file script to the GitHub Release
-        if: ${{ steps.release.outputs.release_created }}
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: gh release upload ${{ steps.release.outputs.tag_name }} bin/claudex --clobber
-
-      - name: Bump the Homebrew tap formula
-        if: ${{ steps.release.outputs.release_created }}
-        uses: mislav/bump-homebrew-formula-action@v3
+      - uses: actions/setup-python@v5
         with:
-          formula-name: claudex
-          formula-path: Formula/claudex.rb
-          homebrew-tap: vishalmakwana111/homebrew-claudex
-          # We run on a branch push (not a tag), so GITHUB_REF isn't a tag —
-          # pass the tag explicitly or the action errors "invalid ref: refs/heads/main".
-          tag-name: ${{ steps.release.outputs.tag_name }}
-          download-url: https://github.com/vishalmakwana111/claudex/archive/refs/tags/${{ steps.release.outputs.tag_name }}.tar.gz
+          python-version: "3.12"
+
+      - name: Install Nuitka
+        run: python3 -m pip install --upgrade pip nuitka
+
+      - name: Compile + ad-hoc sign + checksum (arm64)
+        # Pin the deployment target so the binary runs on macOS 14+ regardless of
+        # the runner's OS version (otherwise the floor follows the build machine).
         env:
-          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+        run: make dist
+
+      - name: Write VERSION marker
+        run: printf '%s' "${{ needs.release-please.outputs.version }}" > dist/VERSION
+
+      - id: auth
+        name: Authenticate to GCP (keyless / WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/632653045864/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: claudex-ci@yash-test-495112.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Publish to the public distribution bucket
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          # versioned (immutable) copy
+          gcloud storage cp dist/claudex-arm64 "gs://claudex-dist/$TAG/claudex-arm64"
+          gcloud storage cp dist/SHA256SUMS    "gs://claudex-dist/$TAG/SHA256SUMS"
+          # rolling latest/ + markers
+          gcloud storage cp dist/claudex-arm64 "gs://claudex-dist/latest/claudex-arm64"
+          gcloud storage cp dist/SHA256SUMS    "gs://claudex-dist/latest/SHA256SUMS"
+          gcloud storage cp dist/VERSION       "gs://claudex-dist/VERSION"
+          gcloud storage cp packaging/install.sh "gs://claudex-dist/install.sh" \
+            --content-type=text/x-shellscript
+          # keep mutable objects fresh (short cache); immutable versioned copies can cache long
+          gcloud storage objects update \
+            "gs://claudex-dist/VERSION" \
+            "gs://claudex-dist/install.sh" \
+            "gs://claudex-dist/latest/claudex-arm64" \
+            "gs://claudex-dist/latest/SHA256SUMS" \
+            --cache-control="public, max-age=60"

@@ -1,12 +1,31 @@
-.PHONY: check test lint install uninstall clean all
+.PHONY: check test lint build sign dist install uninstall clean all
 
 BIN := bin/claudex
+DIST := dist
+ARCH := $(shell uname -m)
 
 all: check test lint
 
-## check: syntax gate — the same validation `claudex update` runs before installing
+## check: syntax gate — the same validation the release build runs first
 check:
 	python3 -m py_compile $(BIN)
+
+## build: compile the single-file source into a native binary via Nuitka (arm64)
+##        Produces $(DIST)/claudex — machine code, no readable .py/.pyc inside.
+build: check
+	python3 -m nuitka --onefile --assume-yes-for-downloads --static-libpython=no \
+		--output-dir=$(DIST) --output-filename=claudex --remove-output $(BIN)
+	@$(MAKE) sign
+
+## sign: ad-hoc codesign so Apple Silicon Gatekeeper doesn't reject the binary
+sign:
+	codesign -s - --force --timestamp=none $(DIST)/claudex
+	@echo "built $(DIST)/claudex ($(ARCH))"
+
+## dist: build + emit SHA256SUMS next to the binary (what CI uploads to GCS)
+dist: build
+	cd $(DIST) && cp claudex claudex-arm64 && shasum -a 256 claudex-arm64 > SHA256SUMS
+	@echo "dist ready: $(DIST)/claudex-arm64 + $(DIST)/SHA256SUMS"
 
 ## test: run the stdlib unittest suite
 test:
@@ -24,6 +43,7 @@ install:
 uninstall:
 	./uninstall.sh
 
-## clean: remove Python bytecode caches
+## clean: remove Python bytecode caches + build output
 clean:
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} + ; rm -f bin/*.pyc
+	rm -rf $(DIST)
