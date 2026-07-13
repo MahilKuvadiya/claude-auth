@@ -31,6 +31,11 @@ export const config = {
   // row (solves the chicken-and-egg — someone must be able to grant roles first).
   adminEmails: (process.env.ADMIN_EMAILS || 'vishal.makwana@devxlabs.ai')
     .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  // Analytics auto-enrollment: the collector proves org membership with this shared key
+  // (embedded by the installer). Optional email-domain allowlist restricts who may enroll.
+  enrollKey: process.env.ENROLL_KEY || '',
+  enrollDomains: (process.env.ENROLL_DOMAINS || 'devxlabs.ai')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   // Shared secret the internal poll-usage route requires (Cloud Scheduler → OIDC in prod)
   internalToken: process.env.INTERNAL_TOKEN || '',
   logLevel: process.env.LOG_LEVEL || 'info',

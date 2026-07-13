@@ -20,6 +20,8 @@ tags:
   - name: usage
   - name: join-links
   - name: data-plane
+  - name: admin
+  - name: analytics
 
 components:
   securitySchemes:
@@ -33,6 +35,11 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: Member JWT carrying { poolId, memberId } (data plane).
+    analyticsToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Self-scoped analytics token from /v1/analytics/enroll (collector).
   schemas:
     Error:
       type: object
@@ -371,3 +378,203 @@ paths:
                 type: object
                 properties: { ok: { type: boolean }, ingested: { type: integer } }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ---- Admin: user/role + pod management (admin role only) ----
+  /v1/admin/users:
+    get:
+      tags: [admin]
+      summary: List users with roles
+      security: [{ firebaseIdToken: [] }]
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /v1/admin/users/{email}/role:
+    put:
+      tags: [admin]
+      summary: Set a user's role
+      security: [{ firebaseIdToken: [] }]
+      parameters:
+        - { name: email, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties: { role: { type: string, enum: [admin, pod_lead, member] } }
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /v1/admin/pods:
+    get:
+      tags: [admin]
+      summary: List pods with members
+      security: [{ firebaseIdToken: [] }]
+      responses:
+        "200": { description: ok }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin]
+      summary: Create a pod
+      security: [{ firebaseIdToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, leadEmail]
+              properties:
+                name: { type: string }
+                leadEmail: { type: string, format: email }
+                orgId: { type: [string, "null"] }
+      responses:
+        "201": { description: created }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /v1/admin/pods/{id}/members:
+    post:
+      tags: [admin]
+      summary: Add a member to a pod
+      security: [{ firebaseIdToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: { email: { type: string, format: email } }
+      responses:
+        "201": { description: created }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/admin/pods/{id}/members/{email}:
+    delete:
+      tags: [admin]
+      summary: Remove a member from a pod
+      security: [{ firebaseIdToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: email, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: ok }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ---- Analytics ----
+  /v1/analytics/enroll:
+    post:
+      tags: [analytics]
+      summary: Auto-enroll a collector and return a self-scoped analytics token
+      description: Guarded by the shared x-enroll-key header (when configured) + email-domain allowlist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                name: { type: [string, "null"] }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { email: { type: string }, token: { type: string } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /v1/analytics/whoami:
+    get:
+      tags: [analytics]
+      summary: Introspect the analytics token
+      security: [{ analyticsToken: [] }]
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/analytics/ingest:
+    post:
+      tags: [analytics]
+      summary: Ingest transcript deltas (idempotent, self-scoped)
+      security: [{ analyticsToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessions: { type: array, items: { type: object } }
+                messages: { type: array, items: { type: object } }
+                syncState: { type: array, items: { type: object } }
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/analytics/sync-state:
+    get:
+      tags: [analytics]
+      summary: Fetch saved per-file byte offsets to resume incremental sync
+      security: [{ analyticsToken: [] }]
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/analytics/summary:
+    get:
+      tags: [analytics]
+      summary: Aggregate token/cost totals (role-scoped)
+      security: [{ firebaseIdToken: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: days, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/analytics/users:
+    get:
+      tags: [analytics]
+      summary: Per-user leaderboard (role-scoped)
+      security: [{ firebaseIdToken: [] }]
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/analytics/activity:
+    get:
+      tags: [analytics]
+      summary: Daily activity series (role-scoped)
+      security: [{ firebaseIdToken: [] }]
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/analytics/sessions:
+    get:
+      tags: [analytics]
+      summary: List session metadata (ADMIN ONLY)
+      security: [{ firebaseIdToken: [] }]
+      parameters:
+        - { name: user, in: query, schema: { type: string } }
+        - { name: project, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: ok }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /v1/analytics/sessions/{id}:
+    get:
+      tags: [analytics]
+      summary: Full prompt→response thread with content (ADMIN ONLY)
+      security: [{ firebaseIdToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: ok }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

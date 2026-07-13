@@ -17,6 +17,10 @@ import joinRoute from './routes/data/join.js';
 import tokenRoute from './routes/data/token.js';
 import telemetryRoute from './routes/data/telemetry.js';
 import pollUsageRoute from './routes/internal/pollUsage.js';
+import enrollRoute from './routes/analytics/enroll.js';
+import ingestRoute from './routes/analytics/ingest.js';
+import analyticsQueryRoutes from './routes/analytics/query.js';
+import analyticsSessionsRoutes from './routes/analytics/sessions.js';
 
 // Map Pino numeric levels → Cloud Logging severity so logs render correctly in GCP.
 const SEVERITY = { 10: 'DEBUG', 20: 'DEBUG', 30: 'INFO', 40: 'WARNING', 50: 'ERROR', 60: 'CRITICAL' };
@@ -62,6 +66,10 @@ export async function buildServer(opts = {}) {
   await app.register(tokenRoute);
   await app.register(telemetryRoute);
   await app.register(pollUsageRoute);
+  await app.register(enrollRoute);
+  await app.register(ingestRoute);
+  await app.register(analyticsQueryRoutes);
+  await app.register(analyticsSessionsRoutes);
 
   return app;
 }

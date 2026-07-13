@@ -1,7 +1,7 @@
 // Auth strategies as plain preHandler functions (used per route group — nothing is
 // unauthenticated by omission). They attach req.actor / req.member or throw a typed error.
 import { firebaseAuth } from '../lib/clients.js';
-import { verifyMemberToken } from '../lib/jwt.js';
+import { verifyMemberToken, verifyAnalyticsToken } from '../lib/jwt.js';
 import { resolveActor } from '../lib/rbac.js';
 
 function httpError(statusCode, code, message) {
@@ -39,6 +39,14 @@ export async function authFirebase(req) {
 export async function authAdmin(req) {
   await authUser(req);
   if (req.actor.role !== 'admin') throw httpError(403, 'forbidden', 'admin access required');
+}
+
+/** Analytics collector: self-scoped HS256 token. Sets req.subject = the user's email. */
+export async function authAnalytics(req) {
+  const token = bearer(req);
+  if (!token) throw httpError(401, 'unauthenticated', 'analytics token required');
+  try { req.subject = (await verifyAnalyticsToken(token)).sub; }
+  catch { throw httpError(401, 'unauthenticated', 'invalid analytics token'); }
 }
 
 /** Data-plane: member HS256 JWT. Sets req.member = { poolId, memberId }. */
