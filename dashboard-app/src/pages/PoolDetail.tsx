@@ -31,7 +31,7 @@ export function PoolDetail() {
   return (
     <>
       <GlassPanel className="mb-4 flex items-center gap-3 p-[14px_18px]" spec={false}>
-        <Link to="/" className="text-ink-faint no-underline">←</Link>
+        <Link to="/pools" className="text-ink-faint no-underline">←</Link>
         <h1 className="m-0 text-[1.15rem] font-semibold tracking-[-.02em]">Pool</h1>
         <span className="font-mono text-[.8rem] text-ink-faint">{poolId}</span>
         <span className="flex-1" />

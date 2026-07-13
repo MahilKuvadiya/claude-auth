@@ -47,6 +47,82 @@ export const Rollup = z.object({
 });
 export type Rollup = z.infer<typeof Rollup>;
 
+// ---- analytics ----
+export const Me = z.object({
+  email: z.string(),
+  role: z.enum(['admin', 'pod_lead', 'member']).catch('member'),
+  orgId: z.string().nullable().optional(),
+});
+export type Me = z.infer<typeof Me>;
+
+export const Summary = z.object({
+  scope: z.string(),
+  totals: z.object({
+    sessions: z.number().default(0),
+    messages: z.number().default(0),
+    inputTokens: z.number().default(0),
+    outputTokens: z.number().default(0),
+    cacheReadTokens: z.number().default(0),
+    cacheCreateTokens: z.number().default(0),
+    costUsd: z.number().default(0),
+  }),
+});
+export type Summary = z.infer<typeof Summary>;
+
+export const UserRow = z.object({
+  email: z.string(),
+  name: z.string(),
+  role: z.string(),
+  sessions: z.number().default(0),
+  messages: z.number().default(0),
+  inputTokens: z.number().default(0),
+  outputTokens: z.number().default(0),
+  cacheReadTokens: z.number().default(0),
+  cacheCreateTokens: z.number().default(0),
+  costUsd: z.number().default(0),
+});
+export type UserRow = z.infer<typeof UserRow>;
+
+export const ActivityPoint = z.object({
+  date: z.string(),
+  sessions: z.coerce.number().default(0),
+  tokens: z.coerce.number().default(0),
+  cost: z.coerce.number().default(0),
+});
+export type ActivityPoint = z.infer<typeof ActivityPoint>;
+
+export const SessionMeta = z.object({
+  id: z.string(),
+  userEmail: z.string(),
+  project: z.string().nullable().optional(),
+  gitBranch: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  startedAt: z.string().nullable().optional(),
+  endedAt: z.string().nullable().optional(),
+  msgCount: z.number().default(0),
+  inputTokens: z.number().default(0),
+  outputTokens: z.number().default(0),
+  cacheReadTokens: z.number().default(0),
+  cacheCreateTokens: z.number().default(0),
+  costUsd: z.number().default(0),
+});
+export type SessionMeta = z.infer<typeof SessionMeta>;
+
+export const SessionMessage = z.object({
+  uuid: z.string(),
+  role: z.string(),
+  seq: z.number().default(0),
+  text: z.string().nullable().optional(),
+  thinking: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  ts: z.string().nullable().optional(),
+  inputTokens: z.number().default(0),
+  outputTokens: z.number().default(0),
+  toolNames: z.array(z.string()).default([]),
+  isSidechain: z.boolean().default(false),
+});
+export type SessionMessage = z.infer<typeof SessionMessage>;
+
 export const JoinLink = z.object({
   joinToken: z.string(),
   targetEmail: z.string(),

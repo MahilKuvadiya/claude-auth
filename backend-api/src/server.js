@@ -8,14 +8,20 @@ import { installErrorHandlers } from './plugins/errors.js';
 
 import healthRoutes from './routes/health.js';
 import openapiRoutes from './routes/openapi.js';
+import meRoutes from './routes/me.js';
 import poolsRoutes from './routes/control/pools.js';
 import membersRoutes from './routes/control/members.js';
 import rollupsRoutes from './routes/control/rollups.js';
 import joinLinksRoutes from './routes/control/joinLinks.js';
+import adminRoutes from './routes/control/admin.js';
 import joinRoute from './routes/data/join.js';
 import tokenRoute from './routes/data/token.js';
 import telemetryRoute from './routes/data/telemetry.js';
 import pollUsageRoute from './routes/internal/pollUsage.js';
+import enrollRoute from './routes/analytics/enroll.js';
+import ingestRoute from './routes/analytics/ingest.js';
+import analyticsQueryRoutes from './routes/analytics/query.js';
+import analyticsSessionsRoutes from './routes/analytics/sessions.js';
 
 // Map Pino numeric levels → Cloud Logging severity so logs render correctly in GCP.
 const SEVERITY = { 10: 'DEBUG', 20: 'DEBUG', 30: 'INFO', 40: 'WARNING', 50: 'ERROR', 60: 'CRITICAL' };
@@ -52,14 +58,20 @@ export async function buildServer(opts = {}) {
   // routes
   await app.register(healthRoutes);
   await app.register(openapiRoutes);
+  await app.register(meRoutes);
   await app.register(poolsRoutes);
   await app.register(membersRoutes);
   await app.register(rollupsRoutes);
   await app.register(joinLinksRoutes);
+  await app.register(adminRoutes);
   await app.register(joinRoute);
   await app.register(tokenRoute);
   await app.register(telemetryRoute);
   await app.register(pollUsageRoute);
+  await app.register(enrollRoute);
+  await app.register(ingestRoute);
+  await app.register(analyticsQueryRoutes);
+  await app.register(analyticsSessionsRoutes);
 
   return app;
 }

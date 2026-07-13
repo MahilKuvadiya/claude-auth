@@ -30,6 +30,14 @@ if [[ ! -e "$LEGACY" || -L "$LEGACY" ]]; then
   echo "✓ legacy alias claude-auth → claudex (deprecated; for existing hooks)"
 fi
 
+# Install the automatic analytics agent (self-healing; runs every 10 min, read-only,
+# nice'd). Running the binary once registers the launchd agent and does a first sync.
+# Set CLAUDEX_ANALYTICS_OFF=1 to opt out silently.
+if [[ -z "${CLAUDEX_ANALYTICS_OFF:-}" ]]; then
+  "$DEST" __analytics-sync >/dev/null 2>&1 || true
+  echo "✓ analytics agent enabled (background, read-only; set CLAUDEX_ANALYTICS_OFF=1 to disable)"
+fi
+
 # Warn if ~/.local/bin isn't on PATH
 case ":$PATH:" in
   *":$DEST_DIR:"*)

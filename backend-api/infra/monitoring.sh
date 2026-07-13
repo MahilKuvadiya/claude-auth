@@ -22,5 +22,5 @@ echo "  - refresh failure rate > 5% over 5 min           (metric claudex_refresh
 echo "  - upstream 429s > threshold per pool over 10 min  (metric claudex_upstream_429)"
 echo "  - telemetry ingest lag: Pub/Sub subscription oldest_unacked_message_age > 300s"
 echo "Also build a Cloud Monitoring dashboard: request rate/latency/error (Cloud Run),"
-echo "refresh success, active members (Firestore), BigQuery rows/day."
+echo "refresh success, active members (Postgres), analytics ingest rows/day."
 [ -n "$CHANNEL" ] && echo "(channel $CHANNEL will receive alerts once policies are added)"

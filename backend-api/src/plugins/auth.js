@@ -1,7 +1,8 @@
 // Auth strategies as plain preHandler functions (used per route group — nothing is
 // unauthenticated by omission). They attach req.actor / req.member or throw a typed error.
 import { firebaseAuth } from '../lib/clients.js';
-import { verifyMemberToken } from '../lib/jwt.js';
+import { verifyMemberToken, verifyAnalyticsToken } from '../lib/jwt.js';
+import { resolveActor } from '../lib/rbac.js';
 
 function httpError(statusCode, code, message) {
   return Object.assign(new Error(message), { statusCode, code });
@@ -10,16 +11,42 @@ function bearer(req) {
   return (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
 }
 
-/** Control-plane: Firebase ID token with an admin custom claim. Sets req.actor. */
-export async function authFirebase(req) {
+/**
+ * Any authenticated dashboard user. Verifies the Firebase ID token for identity, then
+ * resolves the role SERVER-SIDE from Postgres (never from a client-asserted claim).
+ * Sets req.actor = { uid, email, role: admin|pod_lead|member, orgId }.
+ */
+export async function authUser(req) {
   const idToken = bearer(req);
   if (!idToken) throw httpError(401, 'unauthenticated', 'sign-in required');
   let decoded;
   try { decoded = await firebaseAuth.verifyIdToken(idToken); }
   catch { throw httpError(401, 'unauthenticated', 'invalid or expired session'); }
-  if (decoded.role !== 'org_admin' && decoded.role !== 'pod_lead')
+  if (!decoded.email) throw httpError(403, 'forbidden', 'account has no email');
+  const actor = await resolveActor(decoded.email);
+  req.actor = { uid: decoded.uid, ...actor };
+  return req.actor;
+}
+
+/** Control-plane (pool management): an authenticated user with an elevated role. */
+export async function authFirebase(req) {
+  await authUser(req);
+  if (req.actor.role !== 'admin' && req.actor.role !== 'pod_lead')
     throw httpError(403, 'forbidden', 'admin access required');
-  req.actor = { uid: decoded.uid, email: decoded.email, role: decoded.role, orgId: decoded.orgId || null };
+}
+
+/** Admin-only preHandler (pod/role management, session content). */
+export async function authAdmin(req) {
+  await authUser(req);
+  if (req.actor.role !== 'admin') throw httpError(403, 'forbidden', 'admin access required');
+}
+
+/** Analytics collector: self-scoped HS256 token. Sets req.subject = the user's email. */
+export async function authAnalytics(req) {
+  const token = bearer(req);
+  if (!token) throw httpError(401, 'unauthenticated', 'analytics token required');
+  try { req.subject = (await verifyAnalyticsToken(token)).sub; }
+  catch { throw httpError(401, 'unauthenticated', 'invalid analytics token'); }
 }
 
 /** Data-plane: member HS256 JWT. Sets req.member = { poolId, memberId }. */

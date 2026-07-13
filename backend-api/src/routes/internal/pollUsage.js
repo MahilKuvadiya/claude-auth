@@ -1,4 +1,4 @@
-import { db } from '../../lib/clients.js';
+import { prisma } from '../../lib/clients.js';
 import { memberAccessToken } from '../../lib/members.js';
 import { anthropicUsage } from '../../lib/anthropic.js';
 import { config } from '../../config.js';
@@ -24,19 +24,23 @@ export default async function pollUsageRoute(app) {
     if (!config.internalToken || tok !== config.internalToken)
       throw Object.assign(new Error('internal only'), { statusCode: 403, code: 'forbidden' });
 
-    const pools = await db.collection('pools').where('status', '==', 'active').get();
+    const pools = await prisma.pool.findMany({ where: { status: 'active' }, select: { id: true } });
     let updated = 0;
-    for (const p of pools.docs) {
-      const members = await p.ref.collection('members').get();
-      for (const m of members.docs) {
-        if (m.data().status === 'revoked') continue;
-        const token = await memberAccessToken(p.id, m.id);
+    for (const p of pools) {
+      const members = await prisma.member.findMany({
+        where: { poolId: p.id, status: { not: 'revoked' } }, select: { memberId: true },
+      });
+      for (const m of members) {
+        const token = await memberAccessToken(p.id, m.memberId);
         if (!token) continue;
         const usage = await anthropicUsage(token);
         if (!usage) continue;
         const fiveHourPct = pctUsed(usage.five_hour || usage.fiveHour);
         const weeklyPct = pctUsed(usage.seven_day || usage.weekly);
-        await m.ref.set({ rateLimit: { fiveHourPct, weeklyPct }, rateLimitAt: Date.now() }, { merge: true });
+        await prisma.member.update({
+          where: { poolId_memberId: { poolId: p.id, memberId: m.memberId } },
+          data: { rateLimit: { fiveHourPct, weeklyPct, at: Date.now() } },
+        });
         updated += 1;
       }
     }
