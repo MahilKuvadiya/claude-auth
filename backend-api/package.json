@@ -10,7 +10,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "node --test test/unit/*.test.js test/contract.test.js",
-    "test:emulator": "firebase emulators:exec --only firestore --project yash-test-495112 'node --experimental-test-module-mocks --test test/integration/*.test.js'",
+    "test:integration": "node --experimental-test-module-mocks --test test/integration/*.test.js",
     "contract": "node --test test/contract.test.js",
     "lint": "node --check src/index.js",
     "prisma:generate": "prisma generate",

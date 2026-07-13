@@ -9,13 +9,12 @@ function req(name, fallback) {
 
 export const config = {
   project: req('GCP_PROJECT', 'yash-test-495112'),
-  database: req('FIRESTORE_DB', 'claude-pool'),
   location: req('KMS_LOCATION', 'asia-south1'),
-  kmsKey: process.env.KMS_KEY
-    || `projects/${req('GCP_PROJECT', 'yash-test-495112')}/locations/${req('KMS_LOCATION', 'asia-south1')}/keyRings/claude-pool/cryptoKeys/refresh-tokens`,
   usageTopic: req('USAGE_TOPIC', 'claude-pool-usage'),
+  // Member/analytics JWT signing key. Cloud Run injects JWT_SECRET pointing at
+  // claudex-jwt-<env>; the fallback is for local dev only.
   jwtSecretName: process.env.JWT_SECRET
-    || `projects/${req('GCP_PROJECT', 'yash-test-495112')}/secrets/claudex-member-jwt/versions/latest`,
+    || `projects/${req('GCP_PROJECT', 'yash-test-495112')}/secrets/claudex-jwt-uat/versions/latest`,
 
   // Anthropic OAuth (public client id — not a secret)
   oauthTokenUrl: process.env.OAUTH_TOKEN_URL || 'https://platform.claude.com/v1/oauth/token',
