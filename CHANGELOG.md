@@ -4,6 +4,29 @@ All notable changes are documented here. This file is maintained automatically b
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit
 messages; the entry below the header is the pre-automation baseline.
 
+## [2.2.0](https://github.com/vishalmakwana111/claudex/compare/v2.1.1...v2.2.0) (2026-07-13)
+
+
+### Features
+
+* **api:** Phase 3 — port pool/admin backend Firestore → Prisma/Postgres ([300c9d9](https://github.com/vishalmakwana111/claudex/commit/300c9d902ec5450dd254377490aa1a245ffe4c92))
+* **api:** Phase 4 — RBAC (admin/pod_lead/member + pods) ([e13fd86](https://github.com/vishalmakwana111/claudex/commit/e13fd864223336e57411e40b1ba4f04e3da0cb3e))
+* **api:** Phase 5 — analytics ingest + role-scoped query API ([1e4d20b](https://github.com/vishalmakwana111/claudex/commit/1e4d20b9556059ea8ce532c31ea49486681deec2))
+* claudex platform — Postgres/Prisma, RBAC, analytics, 2-env IaC ([f6aee93](https://github.com/vishalmakwana111/claudex/commit/f6aee93568dae33f2d495a0a31d364e6f6e9cf5b))
+* claudex platform — Postgres/Prisma, RBAC, analytics, 2-env IaC ([1e98a87](https://github.com/vishalmakwana111/claudex/commit/1e98a8715dbc616732ca6c7a4fc944ebc1e102da))
+* **cli,dashboard:** Phase 9 — point clients at the unified Cloud Run API ([83670a5](https://github.com/vishalmakwana111/claudex/commit/83670a581c6fc245fbf2234af68ac82d3b47f076))
+* **cli:** Phase 6 — automatic, zero-management analytics collector ([4647bd2](https://github.com/vishalmakwana111/claudex/commit/4647bd287818cf9d128bc8dcf79394002ddd5f87))
+* **dashboard,api:** Phase 7 — role-aware analytics console ([f66a530](https://github.com/vishalmakwana111/claudex/commit/f66a53027780be16bc35c0f2bde419aa548c1e4c))
+* **infra,db:** Phase 1-2 — Cloud SQL + per-env creds + Prisma schema ([e13a043](https://github.com/vishalmakwana111/claudex/commit/e13a0437b789481a2161e586fbdbd1ee8acba8d5))
+* **infra:** Phase 0 — Terraform foundation (shared globals adopted, env state) ([1374cc0](https://github.com/vishalmakwana111/claudex/commit/1374cc09d7adbb5b0d777eae5b5074cd4022c820))
+
+
+### Bug Fixes
+
+* **api:** pin Prisma binaryTargets for distroless runtime ([6280e8d](https://github.com/vishalmakwana111/claudex/commit/6280e8dd1191f5bd942aa25f1b8ace0863209af5))
+* **ci:** deploy job needs npm ci + robust DATABASE_URL resolution ([b50f35a](https://github.com/vishalmakwana111/claudex/commit/b50f35a367ecd458e8fd553a474366e2bb8ea8ed))
+* **migrate:** upsert Org before Pool to satisfy orgId FK ([ea17906](https://github.com/vishalmakwana111/claudex/commit/ea17906094452221b181104ca0c151a44ac1862f))
+
 ## [2.1.1](https://github.com/vishalmakwana111/claudex/compare/v2.1.0...v2.1.1) (2026-07-12)
 
 
