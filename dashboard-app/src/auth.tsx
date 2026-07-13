@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, ReactNode } from 'react
 import {
   onIdTokenChanged, signInWithEmailAndPassword, sendPasswordResetEmail, signOut, User,
 } from 'firebase/auth';
-import { auth } from './firebase';
+import { auth, firebaseError } from './firebase';
 import { fetchMe } from './api';
 import { E2E, e2eEmail, e2eRole } from './lib/e2e';
 
@@ -38,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
+    if (firebaseError) { setLoading(false); return; } // App shows a config screen
     return onIdTokenChanged(auth, async (u) => {
       setUser(u);
       // Role is resolved SERVER-SIDE from Postgres (never the Firebase claim).

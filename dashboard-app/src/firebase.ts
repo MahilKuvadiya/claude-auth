@@ -9,12 +9,22 @@ const cfg = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-// In E2E mode we never touch Firebase (auth is faked) — and calling getAuth() with an
-// empty config throws auth/invalid-api-key at import, so skip real init entirely.
-const app = E2E ? null : initializeApp(cfg);
-export const auth = (E2E || !app ? ({} as unknown) : getAuth(app)) as Auth;
+// Fail soft: a missing/invalid key shouldn't white-screen the app. We surface
+// `firebaseError` and let App render a friendly config screen instead.
+export let firebaseError: string | null = null;
+let _auth: unknown = {};
+if (E2E) {
+  _auth = {}; // faked auth in E2E; never touches Firebase
+} else if (!cfg.apiKey) {
+  firebaseError = 'Missing VITE_FIREBASE_API_KEY — add your Firebase web keys to dashboard-app/.env.local.';
+} else {
+  try {
+    _auth = getAuth(initializeApp(cfg));
+  } catch (e) {
+    firebaseError = (e as Error).message || 'Firebase failed to initialize.';
+  }
+}
+export const auth = _auth as Auth;
 
-// Auth is Google/email-password (identity only). Roles are resolved SERVER-SIDE from
-// Postgres via GET /v1/me (admin bootstrap = the API's ADMIN_EMAILS). No self-serve
-// sign-up. All data flows through the unified REST API (backend-api) — no Firestore.
+// All data flows through the unified REST API (backend-api) — no Firestore.
 export const API_URL = (import.meta.env.VITE_API_URL as string || '').replace(/\/$/, '');
