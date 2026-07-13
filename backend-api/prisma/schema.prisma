@@ -2,7 +2,11 @@
 // Token totals use BigInt (cache-read lifetime totals can exceed 2^31); the API serializes BigInt → Number/string.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Bundle the query engine for the distroless runtime (debian12 = openssl 3.0.x),
+  // plus the local dev platform. Without this, the image ships only the build host's
+  // engine and the container crashes at boot on Cloud Run.
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
