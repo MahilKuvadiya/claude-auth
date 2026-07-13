@@ -1,5 +1,8 @@
-node_modules/
-dist/
+node_modules
+dist
 .env.local
-*.local
-tsconfig.tsbuildinfo
+.env
+test-results
+playwright-report
+/tests/e2e/__screens__
+*.tsbuildinfo

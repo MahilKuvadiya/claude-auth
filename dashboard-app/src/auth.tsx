@@ -4,6 +4,7 @@ import {
 } from 'firebase/auth';
 import { auth } from './firebase';
 import { fetchMe } from './api';
+import { E2E, e2eEmail, e2eRole } from './lib/e2e';
 
 interface AuthState {
   user: User | null;
@@ -29,21 +30,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(
-    () =>
-      onIdTokenChanged(auth, async (u) => {
-        setUser(u);
-        // Role is resolved SERVER-SIDE from Postgres (never the Firebase claim).
-        if (u) {
-          try { setRole((await fetchMe()).role); }
-          catch { setRole('member'); }
-        } else {
-          setRole(null);
-        }
-        setLoading(false);
-      }),
-    [],
-  );
+  useEffect(() => {
+    // E2E: skip Firebase, run as a fake user whose role comes from ?e2e=<role>.
+    if (E2E) {
+      setUser({ email: e2eEmail(), displayName: e2eRole() } as unknown as User);
+      setRole(e2eRole());
+      setLoading(false);
+      return;
+    }
+    return onIdTokenChanged(auth, async (u) => {
+      setUser(u);
+      // Role is resolved SERVER-SIDE from Postgres (never the Firebase claim).
+      if (u) {
+        try { setRole((await fetchMe()).role); }
+        catch { setRole('member'); }
+      } else {
+        setRole(null);
+      }
+      setLoading(false);
+    });
+  }, []);
 
   const signIn = async (email: string, password: string) => {
     setError(null);

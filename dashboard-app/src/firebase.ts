@@ -1,5 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, type Auth } from 'firebase/auth';
+import { E2E } from './lib/e2e';
 
 const cfg = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -8,8 +9,10 @@ const cfg = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-export const app = initializeApp(cfg);
-export const auth = getAuth(app);
+// In E2E mode we never touch Firebase (auth is faked) — and calling getAuth() with an
+// empty config throws auth/invalid-api-key at import, so skip real init entirely.
+const app = E2E ? null : initializeApp(cfg);
+export const auth = (E2E || !app ? ({} as unknown) : getAuth(app)) as Auth;
 
 // Auth is Google/email-password (identity only). Roles are resolved SERVER-SIDE from
 // Postgres via GET /v1/me (admin bootstrap = the API's ADMIN_EMAILS). No self-serve
