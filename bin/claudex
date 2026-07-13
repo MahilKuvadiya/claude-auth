@@ -101,12 +101,15 @@ LAST_REQ_TS = 0.0      # epoch of the last proxied request (for passthrough idle
 PASSTHROUGH_IDLE_SECS = 900   # a stopped-but-passthrough daemon self-exits after this idle
 
 # ── claudex pool backend (GCP Cloud Functions) — server-side token custody ──
-# When a pool config has {"backend": true}, tokens are custodied server-side and
-# minted on demand instead of living in a Pantry blob. URLs are env-overridable.
+# The unified claudex REST API (Cloud Run). Everything — pool control/data-plane and
+# analytics — is served here. Env-overridable (CLAUDEX_API) for UAT/local; defaults to prod.
+CLAUDEX_API = os.environ.get("CLAUDEX_API", "https://claudex-api-prod-tvjj3mwixq-el.a.run.app").rstrip("/")
+
+# When a pool config has {"backend": true}, tokens are custodied server-side and minted
+# on demand. Fixed-path endpoints; per-pool paths are built inline from CLAUDEX_API.
 CLAUDEX_BACKEND = {
-    "join":      os.environ.get("CLAUDEX_JOIN_URL",      "https://asia-south1-yash-test-495112.cloudfunctions.net/claudex-poolJoin"),
-    "token":     os.environ.get("CLAUDEX_TOKEN_URL",     "https://asia-south1-yash-test-495112.cloudfunctions.net/claudex-poolToken"),
-    "telemetry": os.environ.get("CLAUDEX_TELEMETRY_URL", "https://asia-south1-yash-test-495112.cloudfunctions.net/claudex-telemetry"),
+    "join":      os.environ.get("CLAUDEX_JOIN_URL",      f"{CLAUDEX_API}/v1/pools/join"),
+    "telemetry": os.environ.get("CLAUDEX_TELEMETRY_URL", f"{CLAUDEX_API}/v1/telemetry"),
 }
 
 REPO = "github.com/vishalmakwana111/claudex"
@@ -121,7 +124,7 @@ DIST_ARCH = "claudex-arm64"  # Apple Silicon only — see install.sh for the Int
 # by byte offset and POSTing new turns to the team API. It is READ-ONLY over ~/.claude
 # (never writes there), nice'd + detached (zero UX lag), and self-installing. There is
 # no user-facing command; the only control is the silent CLAUDEX_ANALYTICS_OFF kill-switch.
-ANALYTICS_API      = os.environ.get("CLAUDEX_API", "").rstrip("/")
+ANALYTICS_API      = CLAUDEX_API   # same unified API
 ANALYTICS_STATE    = os.path.join(STORE_DIR, "analytics-state.json")
 ANALYTICS_LOG      = os.path.join(STORE_DIR, "analytics.log")
 ANALYTICS_LABEL    = "ai.devxlabs.claudex.analytics"
@@ -1929,16 +1932,16 @@ class BackendStore:
         self.name = cfg.get("name") or "me"
 
     def fetch_token(self, serve_member=None):
-        url = CLAUDEX_BACKEND["token"] + f"?pool={self.pool_id}"
+        url = f"{CLAUDEX_API}/v1/pools/{self.pool_id}/token"
         if serve_member:
-            url += f"&serve={serve_member}"
+            url += f"?serve={serve_member}"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.member_token}"})
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read().decode())
 
     def list_members(self):
         """All members of this pool, so `pool members` and `pool use <name>` see everyone."""
-        url = CLAUDEX_BACKEND["token"] + f"?pool={self.pool_id}&members=1"
+        url = f"{CLAUDEX_API}/v1/pools/{self.pool_id}/members"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.member_token}"})
         try:
             with urllib.request.urlopen(req, timeout=15) as r:
@@ -1977,7 +1980,7 @@ class BackendStore:
 
     def fetch_usage_all(self):
         """Per-member live rate-limit headroom (the backend queries Anthropic)."""
-        url = CLAUDEX_BACKEND["token"] + f"?pool={self.pool_id}&usage=1"
+        url = f"{CLAUDEX_API}/v1/pools/{self.pool_id}/usage"
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.member_token}"})
         with urllib.request.urlopen(req, timeout=40) as r:
             return json.loads(r.read().decode()).get("members", [])
