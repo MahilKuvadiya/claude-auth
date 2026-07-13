@@ -27,6 +27,8 @@ import subprocess
 import argparse
 import urllib.request
 import urllib.error
+import urllib.parse
+import socket
 import http.client
 import ssl
 import concurrent.futures
@@ -1657,17 +1659,46 @@ def cmd_autoswitch(args):
 #
 # Testing seam: set CLAUDE_AUTH_UPSTREAM_HOST / _PORT / _PLAIN to point the
 # forwarder at a fake upstream instead of api.anthropic.com.
+#
+# Chain-through: when the user already had an ANTHROPIC_BASE_URL (e.g. a corp
+# gateway), the always-on daemon forwards to THAT instead of api.anthropic.com —
+# set from proxy.json.upstream into _UPSTREAM_OVERRIDE at daemon startup, so their
+# gateway keeps seeing all traffic and pooling layers on top.
+
+_UPSTREAM_OVERRIDE = None   # (host, port, https) — set by `proxy serve` from proxy.json.upstream
+
+def _parse_upstream(url):
+    """Parse a base URL into (host, port, https), or None if unusable."""
+    try:
+        u = urllib.parse.urlsplit(url)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            return None
+        https = (u.scheme == "https")
+        return (u.hostname, u.port or (443 if https else 80), https)
+    except Exception:
+        return None
+
+def _upstream_target():
+    """Resolve where to forward: test-env seam wins (for tests), then the
+    chain-through override, else api.anthropic.com. Returns (host, port, https)."""
+    env_host  = os.environ.get("CLAUDE_AUTH_UPSTREAM_HOST")
+    env_plain = os.environ.get("CLAUDE_AUTH_UPSTREAM_PLAIN")
+    env_port  = os.environ.get("CLAUDE_AUTH_UPSTREAM_PORT")
+    if env_host or env_plain or env_port:              # test seam (unchanged semantics)
+        https = not env_plain
+        return (env_host or "api.anthropic.com",
+                int(env_port) if env_port else (80 if env_plain else 443), https)
+    if _UPSTREAM_OVERRIDE:
+        return _UPSTREAM_OVERRIDE
+    return ("api.anthropic.com", 443, True)
 
 def _upstream_host():
-    return os.environ.get("CLAUDE_AUTH_UPSTREAM_HOST", "api.anthropic.com")
+    return _upstream_target()[0]
 
 def _upstream_conn(timeout=300):
-    host = _upstream_host()
-    if os.environ.get("CLAUDE_AUTH_UPSTREAM_PLAIN"):   # plain HTTP, for tests only
-        return http.client.HTTPConnection(
-            host, int(os.environ.get("CLAUDE_AUTH_UPSTREAM_PORT", "80")), timeout=timeout)
-    return http.client.HTTPSConnection(
-        host, int(os.environ.get("CLAUDE_AUTH_UPSTREAM_PORT", "443")), timeout=timeout)
+    host, port, https = _upstream_target()
+    cls = http.client.HTTPSConnection if https else http.client.HTTPConnection
+    return cls(host, port, timeout=timeout)
 
 def _upstream_exchange(conn, method, path, body, headers,
                        read_timeout=_UPSTREAM_READ_TIMEOUT):
@@ -2102,6 +2133,22 @@ def _proxy_set_mode(mode):
     if mode not in PROXY_MODES:
         raise ValueError(f"mode must be one of {PROXY_MODES}")
     _proxy_state_write(mode=mode)
+
+def _proxy_state_delete(*keys):
+    """Remove keys from proxy.json (atomic). Used by unwire to drop the captured
+    prev/upstream so a later re-wire starts clean."""
+    st = _proxy_state_read()
+    changed = False
+    for k in keys:
+        if k in st:
+            del st[k]; changed = True
+    if not changed:
+        return
+    os.makedirs(STORE_DIR, exist_ok=True)
+    tmp = PROXY_STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f, indent=2)
+    os.replace(tmp, PROXY_STATE)
 
 
 class _Pool:
@@ -2821,6 +2868,71 @@ def _unwire_base_url():
             s.pop("env", None)
     _write_settings(s)
 
+# ── always-on proxy wiring (Phase 3) — separate from the legacy pool wiring above ──
+# These own routing for the always-on model: wire at install/`proxy on`, unwire at
+# `proxy off`/uninstall. `pool start`/`pool stop` do NOT touch settings anymore.
+
+def _pick_proxy_port(preferred=DEFAULT_POOL_PORT):
+    """Preferred loopback port if free, else the next free one (best-effort scan,
+    then an OS-assigned fallback). A later TOCTOU loss is handled by the daemon's
+    graceful bind-failure path."""
+    def _free(p):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("127.0.0.1", p)); return True
+        except OSError:
+            return False
+        finally:
+            s.close()
+    if _free(preferred):
+        return preferred
+    for p in range(preferred + 1, preferred + 64):
+        if _free(p):
+            return p
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close()
+    return p
+
+def _proxy_wire(port):
+    """Point Claude Code at our proxy on `port`. Capture any prior ANTHROPIC_BASE_URL
+    exactly ONCE (never overwrite a stored capture — the P-F3 bug); if the prior
+    value is a real external endpoint, record it as the chain-through `upstream` so
+    the daemon forwards to it. Idempotent: re-wiring to our own loopback is a no-op
+    and never self-captures."""
+    url = f"http://127.0.0.1:{port}"
+    s = _read_settings()
+    env = s.setdefault("env", {})
+    prev = env.get("ANTHROPIC_BASE_URL")
+    st = _proxy_state_read()
+    if prev and prev != url and "wiredBaseUrlPrev" not in st:   # capture ONCE
+        if not prev.startswith("http://127.0.0.1:"):
+            _proxy_state_write(wiredBaseUrlPrev=prev, upstream=prev)   # chain through the gateway
+            warn(f"chaining through your existing ANTHROPIC_BASE_URL ({prev})")
+        else:
+            _proxy_state_write(wiredBaseUrlPrev=prev)                  # another loopback tool
+            warn(f"replacing existing loopback ANTHROPIC_BASE_URL ({prev})")
+    env["ANTHROPIC_BASE_URL"] = url
+    _write_settings(s)
+    _proxy_state_write(port=port)
+
+def _proxy_unwire():
+    """Restore the pre-claudex ANTHROPIC_BASE_URL (or remove the key), then clear the
+    captured prev/upstream. Only ever touches OUR own loopback wiring."""
+    s = _read_settings()
+    env = s.get("env")
+    if isinstance(env, dict):
+        cur = env.get("ANTHROPIC_BASE_URL", "")
+        if cur.startswith("http://127.0.0.1:"):        # never delete a value we didn't set
+            prev = _proxy_state_read().get("wiredBaseUrlPrev")
+            if prev:
+                env["ANTHROPIC_BASE_URL"] = prev
+            else:
+                del env["ANTHROPIC_BASE_URL"]
+                if not env:
+                    s.pop("env", None)
+            _write_settings(s)
+    _proxy_state_delete("wiredBaseUrlPrev", "upstream")
+
 def _pool_wait_health(port, timeout=6.0):
     deadline = time.time() + timeout
     url = f"http://127.0.0.1:{port}/__pool/health"
@@ -2990,11 +3102,18 @@ def _proxy_serve(args):
     requested and RELEASES it (POOL=None, no refresh) whenever we're in passthrough,
     preserving the 'passthrough holds no secrets' invariant. Restarted on any exit
     by launchd; never self-exits."""
-    global PASSTHROUGH, PROXY_SUPERVISED, POOL
+    global PASSTHROUGH, PROXY_SUPERVISED, POOL, _UPSTREAM_OVERRIDE
     PROXY_SUPERVISED = True
     PASSTHROUGH = False                       # supervised routing comes from the mode flag, not this global
     POOL = None
-    port = args.port or DEFAULT_POOL_PORT
+    st = _proxy_state_read()
+    up = st.get("upstream")                   # chain-through: forward to the user's prior base URL if set
+    if up:
+        t = _parse_upstream(up)
+        if t and t[0] != "api.anthropic.com":
+            _UPSTREAM_OVERRIDE = t
+            _pool_log(f"proxy: chaining upstream → {up}")
+    port = args.port or st.get("port") or DEFAULT_POOL_PORT
     try:
         httpd = _BoundedThreadingHTTPServer(("127.0.0.1", port), PoolHandler)
     except OSError as e:
@@ -3055,19 +3174,77 @@ def _proxy_serve(args):
         raise
     _pool_log("proxy stopped")
 
+def _proxy_health_is_ours(port, timeout=6.0):
+    """True once /__pool/health on `port` is answered by OUR daemon (identity marker),
+    not just any listener. Prevents wiring Claude Code to a foreign server (R2/P-E1)."""
+    deadline = time.time() + timeout
+    url = f"http://127.0.0.1:{port}/__pool/health"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1) as r:
+                if r.status == 200:
+                    d = json.loads(r.read().decode())
+                    if d.get("service") == "claudex-pool":
+                        return True
+        except Exception:
+            pass
+        time.sleep(0.15)
+    return False
+
+def _proxy_on():
+    """Install/repair the always-on agent AND wire routing — the routing-enable path.
+    Order matters: ensure the agent, confirm OUR daemon is healthy, THEN wire (never
+    wire a dead/foreign port). Default mode stays passthrough (swap needs `pool start`)."""
+    if _proxy_off():
+        warn("CLAUDEX_PROXY_OFF is set — refusing to enable the proxy"); return
+    if not _is_compiled():
+        die("`proxy on` needs the installed binary (the launchd agent won't run from the raw script)")
+    port = _pick_proxy_port(_proxy_state_read().get("port") or DEFAULT_POOL_PORT)
+    _proxy_state_write(port=port)
+    if "mode" not in _proxy_state_read():
+        _proxy_set_mode("passthrough")               # safe floor until the user pools
+    ensure_proxy_agent(port)
+    if not _proxy_health_is_ours(port):
+        warn(f"proxy did not come up healthy on 127.0.0.1:{port} — NOT wiring "
+             + dim("(check ") + clay("claudex proxy status") + dim(")"))
+        return
+    _proxy_wire(port)
+    _proxy_state_write(enrolled=True)                # opt-in marker: gates main() self-heal
+    ok(f"Proxy on " + dim(f"· 127.0.0.1:{port} · mode {_proxy_mode()} · always-on"))
+    hint("Claude Code now routes through the proxy · " + clay("claudex pool start")
+         + dim(" to begin pooling · ") + clay("claudex proxy off") + dim(" to revert"))
+
+def _proxy_off_cmd():
+    """Reversible 'back to normal': unwire (restore prior) + remove the agent +
+    clear the enroll marker (so main() never re-enrolls). Leaves the mode flag."""
+    _proxy_unwire()
+    remove_proxy_agent()
+    _proxy_state_write(enrolled=False)
+    ok("Proxy off " + dim("· routing restored · agent removed"))
+
 def cmd_proxy(args):
-    """Manage the always-on proxy agent. Phase-1 surface: serve/ensure/off/status.
-    `serve` is the launchd entrypoint; the rest manage the agent's lifecycle."""
+    """Manage the always-on proxy. `serve` is the launchd entrypoint; `on`/`off`
+    enable/disable routing; `ensure` self-heals the agent; `mode` toggles swap."""
     action = getattr(args, "action", "status") or "status"
     if action == "serve":
         return _proxy_serve(args)
-    if action == "ensure":
-        ensure_proxy_agent(args.port or DEFAULT_POOL_PORT)
-        ok("proxy agent ensured" if _is_compiled() else "proxy agent is compiled-binary only (no-op here)")
+    if action in ("on", "install"):
+        return _proxy_on()
+    if action == "off":
+        return _proxy_off_cmd()
+    if action == "uninstall":
+        _proxy_off_cmd()
+        try: os.remove(PROXY_STATE)
+        except OSError: pass
+        ok("proxy state removed")
         return
-    if action in ("off", "uninstall"):
-        remove_proxy_agent()
-        ok("proxy agent removed " + dim("· launchd job booted out and disabled"))
+    if action == "ensure":
+        # self-heal only if already enrolled (never enroll a user who opted out)
+        if _proxy_state_read().get("enrolled"):
+            ensure_proxy_agent(_proxy_state_read().get("port") or DEFAULT_POOL_PORT)
+            ok("proxy agent ensured")
+        else:
+            hint("proxy not enabled — run " + clay("claudex proxy on"))
         return
     if action == "mode":
         val = getattr(args, "value", None)
@@ -3082,6 +3259,7 @@ def cmd_proxy(args):
     # status
     pid = _proxy_pid()
     mode = _proxy_mode()
+    st = _proxy_state_read()
     info()
     info(IND + bold(clay("Proxy")) + dim("   ·   always-on local indirection point"))
     info()
@@ -3090,6 +3268,8 @@ def cmd_proxy(args):
         info(IND + dot + " running " + dim(f"(pid {pid}) · mode {mode}"))
     else:
         info(IND + dim("○") + " " + dim(f"not running · mode {mode}"))
+    info(IND + dim(f"enrolled {bool(st.get('enrolled'))} · port {st.get('port', DEFAULT_POOL_PORT)}"
+                   + (f" · upstream {st['upstream']}" if st.get("upstream") else "")))
     hint("agent label " + clay(PROXY_LABEL))
     info()
 
@@ -4890,7 +5070,7 @@ def build_parser():
     # manage the agent. Hidden from the help banner while it's phase-gated.
     px = sub.add_parser("proxy", help=argparse.SUPPRESS)
     px.add_argument("action", nargs="?", default="status",
-                    choices=["serve", "ensure", "off", "uninstall", "status", "mode"])
+                    choices=["serve", "ensure", "on", "install", "off", "uninstall", "status", "mode"])
     px.add_argument("value", nargs="?",
                     help="for `proxy mode`: swap | passthrough (omit to print current)")
     px.add_argument("--port", type=int,
@@ -5297,6 +5477,14 @@ def main():
         die("claudex currently supports macOS only (uses the login Keychain).")
     try:
         ensure_analytics_agent()   # self-healing, silent, compiled-only
+    except Exception:
+        pass
+    try:
+        # Self-heal the proxy agent ONLY for users who already opted in (`proxy on`
+        # / install). Never enrolls anyone here — an opted-out user (enrolled=false /
+        # no state) is untouched. Compiled-only, silent.
+        if _is_compiled() and _proxy_state_read().get("enrolled"):
+            ensure_proxy_agent(_proxy_state_read().get("port") or DEFAULT_POOL_PORT)
     except Exception:
         pass
     parser = build_parser()

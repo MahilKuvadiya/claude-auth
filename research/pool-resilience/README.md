@@ -27,7 +27,8 @@ missed, then the results were de-duplicated and compiled:
 ## Documents
 
 - [`proxy-lifecycle-scenarios.md`](./proxy-lifecycle-scenarios.md) — the compiled scenario catalog (this phase).
-- [`always-on-proxy-design.md`](./always-on-proxy-design.md) — design + phased plan to repurpose the proxy as an always-on, launchd-supervised indirection point with a live persisted mode flag (swap vs passthrough).
+- [`always-on-proxy-design.md`](./always-on-proxy-design.md) — design + phased plan to repurpose the proxy as an always-on, launchd-supervised indirection point with a live persisted mode flag (swap vs passthrough). Phases 0–2 implemented (commit `34aec26`).
+- [`phase3-plan.md`](./phase3-plan.md) — detailed execution plan for Phase 3 (install-time wiring + routing cutover — the first phase that changes behavior for installed users). Needs sign-off before landing sub-phase 3d.
 - [`tools/logserver.py`](./tools/logserver.py) — transparent logging proxy used to empirically verify base-URL behavior.
 
 ## Out of scope (tracked for later phases)
