@@ -1,8 +1,12 @@
 name: terraform-plan
 
 # Drift check on every PR that touches infrastructure. Runs `fmt -check`, `validate`,
-# and a read-only `plan` for the shared + both env roots via keyless WIF. Never applies —
-# infra applies are performed deliberately (gated), not on push, to avoid surprises.
+# and a read-only `plan` for the ENV roots via keyless WIF. Never applies — infra applies
+# are performed deliberately (gated), not on push, to avoid surprises.
+#
+# The `shared` root (Cloud SQL, WIF, SAs, secrets — the sensitive foundation) is
+# intentionally NOT planned here: it's admin-managed, and the CI deployer identity is
+# deliberately not granted read across it. Plan/apply shared locally as an owner/admin.
 on:
   pull_request:
     paths: ["infra/terraform/**", ".github/workflows/tf-plan.yml"]
@@ -17,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        root: [shared, envs/uat, envs/prod]
+        root: [envs/uat, envs/prod]
     defaults:
       run:
         working-directory: infra/terraform/${{ matrix.root }}
