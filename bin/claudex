@@ -96,9 +96,15 @@ _HOP_BY_HOP = {
     "te", "trailer", "trailers", "transfer-encoding", "upgrade",
 }
 POOL = None  # the live _Pool instance, set inside the `pool serve` daemon
+PROXY_SUPERVISED = False  # True only inside the always-on `proxy serve` daemon: route by the live mode flag
 PASSTHROUGH = False    # set by `pool stop`: forward each request with its OWN token (no pool)
 LAST_REQ_TS = 0.0      # epoch of the last proxied request (for passthrough idle-exit)
 PASSTHROUGH_IDLE_SECS = 900   # a stopped-but-passthrough daemon self-exits after this idle
+# Phase-0 hardening knobs for the always-in-path proxy.
+_UPSTREAM_CONNECT_TIMEOUT = 10        # fail over fast on a black-hole network (was: one 300s socket)
+_UPSTREAM_READ_TIMEOUT    = 300       # long, for streaming SSE bodies
+POOL_LOG_MAX  = 5 * 1024 * 1024       # rotate pool.log past this size (→ pool.log.1) so it can't fill the disk
+POOL_MAX_WORKERS = min(64, (os.cpu_count() or 4) * 8)   # cap concurrent request threads (backpressure, no explosion)
 
 # ── claudex pool backend (GCP Cloud Functions) — server-side token custody ──
 # The unified claudex REST API (Cloud Run). Everything — pool control/data-plane and
@@ -136,6 +142,22 @@ ANALYTICS_CHUNK    = 500            # messages per POST
 
 def _analytics_off():
     return bool(os.environ.get("CLAUDEX_ANALYTICS_OFF"))
+
+# ───────────────────── always-on proxy agent (launchd) ─────────────────────
+# The pool proxy, repurposed as an always-on local indirection point kept alive
+# by a per-user launchd agent (RunAtLoad + KeepAlive): it survives crashes and
+# restarts within a sub-second self-heal window. `proxy serve` binds first and
+# serves transparent passthrough by default (token-swap is toggled separately by
+# the pool mode flag — a later phase). Silent kill-switch: CLAUDEX_PROXY_OFF.
+PROXY_LABEL = "ai.devxlabs.claudex.proxy"
+PROXY_PLIST = os.path.join(HOME, "Library", "LaunchAgents", PROXY_LABEL + ".plist")
+PROXY_PID   = os.path.join(STORE_DIR, "proxy.pid")
+PROXY_LOG   = os.path.join(STORE_DIR, "proxy.log")
+PROXY_STATE = os.path.join(STORE_DIR, "proxy.json")   # persisted mode flag (swap|passthrough) + port
+PROXY_MODES = ("passthrough", "swap")
+
+def _proxy_off():
+    return bool(os.environ.get("CLAUDEX_PROXY_OFF"))
 
 # ───────────────────────────── theme ──────────────────────────────────────
 
@@ -1639,13 +1661,27 @@ def cmd_autoswitch(args):
 def _upstream_host():
     return os.environ.get("CLAUDE_AUTH_UPSTREAM_HOST", "api.anthropic.com")
 
-def _upstream_conn():
+def _upstream_conn(timeout=300):
     host = _upstream_host()
     if os.environ.get("CLAUDE_AUTH_UPSTREAM_PLAIN"):   # plain HTTP, for tests only
         return http.client.HTTPConnection(
-            host, int(os.environ.get("CLAUDE_AUTH_UPSTREAM_PORT", "80")), timeout=300)
+            host, int(os.environ.get("CLAUDE_AUTH_UPSTREAM_PORT", "80")), timeout=timeout)
     return http.client.HTTPSConnection(
-        host, int(os.environ.get("CLAUDE_AUTH_UPSTREAM_PORT", "443")), timeout=300)
+        host, int(os.environ.get("CLAUDE_AUTH_UPSTREAM_PORT", "443")), timeout=timeout)
+
+def _upstream_exchange(conn, method, path, body, headers,
+                       read_timeout=_UPSTREAM_READ_TIMEOUT):
+    """Send an upstream request with a short CONNECT timeout, then raise the socket
+    timeout to the long READ timeout for streaming the response. Splitting the two
+    means a black-hole network fails over in seconds instead of hanging 300s, while
+    long SSE bodies still stream without a premature read timeout."""
+    conn.request(method, path, body=body, headers=headers)
+    try:
+        if conn.sock is not None:
+            conn.sock.settimeout(read_timeout)
+    except Exception:
+        pass
+    return conn.getresponse()
 
 def _retry_after_secs(headers):
     """How long to rest an account after a 429, from the response headers."""
@@ -1695,6 +1731,11 @@ def _forward_headers(src, token=None, meter=False):
 def _pool_log(msg):
     try:
         os.makedirs(STORE_DIR, exist_ok=True)
+        try:                                  # size-based rotation: never let the log fill the disk
+            if os.path.getsize(POOL_LOG) > POOL_LOG_MAX:
+                os.replace(POOL_LOG, POOL_LOG + ".1")
+        except OSError:
+            pass                              # missing file (first write) or unwritable → best-effort
         ts = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
         with open(POOL_LOG, "a") as f:
             f.write(f"{ts}  {msg}\n")
@@ -2017,6 +2058,51 @@ def _selected_member_id():
         _SEL_CACHE["sid"] = cfg.get("selectedMemberId")
     return _SEL_CACHE["sid"]
 
+# ── proxy mode flag (proxy.json) — the source of truth for swap vs passthrough ──
+# Read live per request (mtime-cached, so a `pool start/stop` reaches running
+# sessions on their next request with no restart), and persisted so the always-on
+# daemon resumes the chosen mode after a reboot.
+def _proxy_state_read():
+    try:
+        with open(PROXY_STATE) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    except OSError:
+        return {}
+
+def _proxy_state_write(**updates):
+    """Merge updates into proxy.json atomically (tmp + os.replace)."""
+    st = _proxy_state_read()
+    st.update(updates)
+    st.setdefault("version", __version__)
+    os.makedirs(STORE_DIR, exist_ok=True)
+    tmp = PROXY_STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f, indent=2)
+    os.replace(tmp, PROXY_STATE)
+
+_MODE_CACHE = {"mtime": -1.0, "mode": "passthrough"}
+
+def _proxy_mode():
+    """Live effective mode, defaulting to the safe floor `passthrough`. A corrupt
+    or missing file → passthrough (never a mode that would try to hold tokens)."""
+    try:
+        mtime = os.stat(PROXY_STATE).st_mtime
+    except OSError:
+        return "passthrough"
+    if mtime != _MODE_CACHE["mtime"]:
+        m = _proxy_state_read().get("mode")
+        _MODE_CACHE["mtime"] = mtime
+        _MODE_CACHE["mode"] = m if m in PROXY_MODES else "passthrough"
+    return _MODE_CACHE["mode"]
+
+def _proxy_set_mode(mode):
+    if mode not in PROXY_MODES:
+        raise ValueError(f"mode must be one of {PROXY_MODES}")
+    _proxy_state_write(mode=mode)
+
 
 class _Pool:
     """Holds every account's token and decides which one serves each request.
@@ -2040,6 +2126,7 @@ class _Pool:
         self.served_delta = {}          # member_id -> tally their token served since last flush
         self.refresh_locks = {}         # name -> Lock, so parallel requests don't all
                                         # burn the same single-use refresh token at once
+        self.instance_id = secrets.token_hex(8)   # per-daemon identity, surfaced on /__pool/health
         self.reload()
 
     def reload(self):
@@ -2232,7 +2319,7 @@ class _Pool:
 
     def pick(self, exclude=()):
         """Name of the next account to try, or None if all are on cooldown."""
-        now = time.time()
+        now = time.monotonic()             # cooldowns use a monotonic clock (immune to sleep/NTP jumps)
         with self.lock:
             avail = [a for a in self.accounts
                      if a["name"] not in exclude
@@ -2246,7 +2333,7 @@ class _Pool:
 
     def mark_exhausted(self, name, secs):
         with self.lock:
-            self.cooldown[name] = time.time() + max(5, secs)
+            self.cooldown[name] = time.monotonic() + max(5, secs)   # monotonic, see pick()
             self.stats.setdefault(name, {"served": 0, "failover": 0, "last": 0})["failover"] += 1
         _pool_log(f"{name}: rate-limited, resting {secs}s")
 
@@ -2354,9 +2441,11 @@ class _Pool:
             return new
 
     def snapshot(self):
-        now = time.time()
+        now = time.monotonic()             # cooldowns are monotonic (see pick/mark_exhausted)
         with self.lock:
             return {
+                "service": "claudex-pool",             # identity marker: proves this port is our daemon
+                "instanceId": self.instance_id,        # unique per running daemon (health identity check)
                 "mode": self.mode,
                 "accounts": [{
                     "name": a["name"],
@@ -2407,15 +2496,31 @@ class PoolHandler(BaseHTTPRequestHandler):
 
     # ---- local control endpoint (never forwarded) ----
     def _control(self):
-        self._send_json(200, POOL.snapshot() if POOL else {})
+        # Always emit the identity marker so `_pool_wait_health`/status can confirm
+        # this port is OUR daemon (not a foreign 200) even before a pool is loaded.
+        snap = POOL.snapshot() if POOL else {"service": "claudex-pool", "mode": "passthrough"}
+        self._send_json(200, snap)
 
     # ---- the proxy itself ----
     def _proxy(self):
         global LAST_REQ_TS
-        LAST_REQ_TS = time.time()
-        if PASSTHROUGH:                      # `pool stop` flipped us to transparent mode
+        LAST_REQ_TS = time.monotonic()       # monotonic: sleep/NTP can't trip the idle-exit early
+        # Effective routing. Legacy `pool serve` daemon uses the PASSTHROUGH global
+        # (set by SIGUSR1). The always-on `proxy serve` daemon (PROXY_SUPERVISED)
+        # routes by the live, persisted mode flag instead — read per request so a
+        # `pool start`/`pool stop` reaches running sessions with no restart.
+        passthrough = PASSTHROUGH
+        if PROXY_SUPERVISED:
+            passthrough = (_proxy_mode() != "swap")
+        if passthrough:
             return self._proxy_passthrough(self._read_body())
         if POOL is None or not POOL.accounts:
+            # Swap requested but the pool isn't loaded yet or is empty. In the
+            # always-on daemon, DEGRADE to the transparent floor (session keeps
+            # working on its own token) rather than surface a 503 — never a pool
+            # error. Legacy daemon keeps its original 503 for compatibility.
+            if PROXY_SUPERVISED:
+                return self._proxy_passthrough(self._read_body())
             return self._send_json(503, _err_body("no accounts available to pool"))
         body = self._read_body()
         if POOL.store:                       # shared pool: one selected account, no auto-switch
@@ -2427,16 +2532,20 @@ class PoolHandler(BaseHTTPRequestHandler):
         OWN Authorization header — i.e. the running session's own local account
         token — so a session that still points at this port keeps working with no
         restart. We inject nothing; the pool is out of the picture."""
+        conn = None
         try:
-            conn = _upstream_conn()
-            conn.request(self.command, self.path, body=body,
-                         headers=self._passthrough_headers())
-            resp = conn.getresponse()
+            conn = _upstream_conn(timeout=_UPSTREAM_CONNECT_TIMEOUT)
+            resp = _upstream_exchange(conn, self.command, self.path, body,
+                                      self._passthrough_headers())
         except Exception as e:
+            if conn is not None:
+                self._close(conn)
             return self._send_json(502, _err_body(
                 f"pool stopped and passthrough could not reach the API ({e})"))
-        self._stream(resp, "direct")         # relay verbatim (no metering in passthrough)
-        self._close(conn)
+        try:
+            self._stream(resp, "direct")     # relay verbatim (no metering in passthrough)
+        finally:
+            self._close(conn)
 
     def _passthrough_headers(self):
         h = {}
@@ -2488,10 +2597,12 @@ class PoolHandler(BaseHTTPRequestHandler):
         ok_status = resp.status < 400
         if ok_status:
             POOL.note_served(name)
-        counts = self._stream(resp, name)
-        if ok_status:
-            POOL.note_usage(name, counts)
-        self._close(conn)
+        try:
+            counts = self._stream(resp, name)
+            if ok_status:
+                POOL.note_usage(name, counts)
+        finally:
+            self._close(conn)                # always release the upstream socket (no FD leak)
 
     def _proxy_failover(self, body):
         tried, last = set(), None
@@ -2527,19 +2638,24 @@ class PoolHandler(BaseHTTPRequestHandler):
                 last = ("429", name)
                 continue
             POOL.note_served(name)           # success (or a real API error) → stream it back
-            counts = self._stream(resp, name)
-            POOL.note_usage(name, counts)    # meter token usage (shared pool only)
-            self._close(conn)
+            try:
+                counts = self._stream(resp, name)
+                POOL.note_usage(name, counts)  # meter token usage (shared pool only)
+            finally:
+                self._close(conn)            # always release the upstream socket (no FD leak)
             return
         self._all_busy(last)
 
     def _send(self, token, body):
+        conn = None
         try:
-            conn = _upstream_conn()
-            conn.request(self.command, self.path, body=body,
-                         headers=self._upstream_headers(token))
-            return conn.getresponse(), conn, None
+            conn = _upstream_conn(timeout=_UPSTREAM_CONNECT_TIMEOUT)
+            resp = _upstream_exchange(conn, self.command, self.path, body,
+                                      self._upstream_headers(token))
+            return resp, conn, None
         except Exception as e:
+            if conn is not None:             # close on failure so a failed attempt never leaks an FD
+                self._close(conn)
             return None, None, str(e)
 
     def _upstream_headers(self, token):
@@ -2717,6 +2833,31 @@ def _pool_wait_health(port, timeout=6.0):
             time.sleep(0.15)
     return False
 
+class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a cap on concurrent request threads. Unbounded
+    one-thread-per-connection can exhaust FDs/RAM under a burst (many sessions +
+    subagents); we block the accept loop while POOL_MAX_WORKERS are busy — natural
+    backpressure — instead of spawning without limit."""
+    daemon_threads = True
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._worker_sem = threading.BoundedSemaphore(POOL_MAX_WORKERS)
+
+    def process_request(self, request, client_address):
+        self._worker_sem.acquire()               # blocks the accept loop when at capacity
+        try:
+            super().process_request(request, client_address)   # spawns the worker thread
+        except Exception:
+            self._worker_sem.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._worker_sem.release()
+
 def _pool_serve(args):
     """The daemon: bind the proxy and serve until SIGTERM. Spawned by `pool start`."""
     global POOL
@@ -2734,7 +2875,7 @@ def _pool_serve(args):
         die("no accounts available to pool")
     port = args.port or DEFAULT_POOL_PORT
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), PoolHandler)
+        httpd = _BoundedThreadingHTTPServer(("127.0.0.1", port), PoolHandler)
     except OSError as e:
         die(f"could not bind 127.0.0.1:{port} — {e}")
     httpd.daemon_threads = True
@@ -2776,7 +2917,7 @@ def _pool_serve(args):
     def _idle_watch():
         while True:
             time.sleep(30)
-            if PASSTHROUGH and LAST_REQ_TS and (time.time() - LAST_REQ_TS) > PASSTHROUGH_IDLE_SECS:
+            if PASSTHROUGH and LAST_REQ_TS and (time.monotonic() - LAST_REQ_TS) > PASSTHROUGH_IDLE_SECS:
                 _pool_log("passthrough idle — exiting")
                 threading.Thread(target=httpd.shutdown, daemon=True).start()
                 return
@@ -2804,10 +2945,160 @@ def _pool_serve(args):
 
     _pool_log(f"serving 127.0.0.1:{port} mode={POOL.mode} "
               f"{'shared' if remote else 'local'} accounts={[a['name'] for a in POOL.accounts]}")
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    except Exception as e:                    # log a crashing accept loop before the process exits
+        _pool_log(f"serve loop crashed: {e!r}")
+        raise
     _pool_log("stopped")
 
+def _proxy_pid():
+    """PID of the always-on proxy daemon, or None (cleaning a stale pid file)."""
+    try:
+        with open(PROXY_PID) as f:
+            pid = int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        try:
+            os.remove(PROXY_PID)
+        except OSError:
+            pass
+        return None
+    return pid
+
+def _build_pool():
+    """Build a _Pool from the joined shared pool if any, else the local Keychain.
+    Returns the pool, or None if there are no usable accounts (→ stay passthrough)."""
+    cfg = _remote_config()
+    if cfg:
+        p = _Pool("failover", store=_store_from_config(cfg), consumer_id=cfg.get("memberId"))
+    else:
+        p = _Pool("failover")
+    return p if p.accounts else None
+
+def _proxy_serve(args):
+    """The always-on daemon (launchd-managed, `proxy serve`).
+
+    BIND-FIRST: open the listen socket before any config/network work, so the port
+    answers within milliseconds of a (re)launch — closing the restart/health race.
+    Routing follows the live, persisted mode flag (`proxy.json`): `passthrough`
+    forwards the client's own token and holds NO tokens; `swap` injects pooled
+    tokens. A background maintenance thread lazily builds the pool when swap is
+    requested and RELEASES it (POOL=None, no refresh) whenever we're in passthrough,
+    preserving the 'passthrough holds no secrets' invariant. Restarted on any exit
+    by launchd; never self-exits."""
+    global PASSTHROUGH, PROXY_SUPERVISED, POOL
+    PROXY_SUPERVISED = True
+    PASSTHROUGH = False                       # supervised routing comes from the mode flag, not this global
+    POOL = None
+    port = args.port or DEFAULT_POOL_PORT
+    try:
+        httpd = _BoundedThreadingHTTPServer(("127.0.0.1", port), PoolHandler)
+    except OSError as e:
+        # Port busy → don't crash-loop under launchd's KeepAlive; log and exit calmly.
+        _pool_log(f"proxy: could not bind 127.0.0.1:{port} — {e}")
+        die(f"could not bind 127.0.0.1:{port} — {e}")
+    httpd.daemon_threads = True
+    try:
+        with open(PROXY_PID, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+    def _bye(*_):
+        def _shutdown():
+            if POOL is not None and getattr(POOL, "store", None):
+                try: POOL.flush_usage()       # final usage flush for shared pools
+                except Exception: pass
+            httpd.shutdown()
+        threading.Thread(target=_shutdown, daemon=True).start()
+    signal.signal(signal.SIGTERM, _bye)
+    signal.signal(signal.SIGINT, _bye)
+
+    # Maintenance: reconcile POOL with the live mode; periodic shared-pool sync.
+    def _maint():
+        global POOL
+        last_sync = time.monotonic()
+        while True:
+            try:
+                want_swap = (_proxy_mode() == "swap")
+                if want_swap and POOL is None:
+                    POOL = _build_pool()          # None if no accounts → we stay on the floor
+                    if POOL is not None:
+                        _pool_log(f"proxy: swap on — pool loaded ({len(POOL.accounts)} accounts)")
+                elif not want_swap and POOL is not None:
+                    if getattr(POOL, "store", None):
+                        try: POOL.flush_usage()
+                        except Exception: pass
+                    POOL = None                   # passthrough holds NO tokens (invariant)
+                    _pool_log("proxy: passthrough — pool released (no tokens held)")
+                if (POOL is not None and getattr(POOL, "store", None)
+                        and time.monotonic() - last_sync > POOL_SYNC_SECS):
+                    last_sync = time.monotonic()
+                    try: POOL.flush_usage()
+                    except Exception: pass
+                    try: POOL.reload()
+                    except Exception: pass
+            except Exception as e:
+                _pool_log(f"proxy: maint error: {e}")
+            time.sleep(5)
+    threading.Thread(target=_maint, daemon=True).start()
+
+    _pool_log(f"proxy serving 127.0.0.1:{port} mode={_proxy_mode()} pid={os.getpid()}")
+    try:
+        httpd.serve_forever()
+    except Exception as e:
+        _pool_log(f"proxy serve loop crashed: {e!r}")
+        raise
+    _pool_log("proxy stopped")
+
+def cmd_proxy(args):
+    """Manage the always-on proxy agent. Phase-1 surface: serve/ensure/off/status.
+    `serve` is the launchd entrypoint; the rest manage the agent's lifecycle."""
+    action = getattr(args, "action", "status") or "status"
+    if action == "serve":
+        return _proxy_serve(args)
+    if action == "ensure":
+        ensure_proxy_agent(args.port or DEFAULT_POOL_PORT)
+        ok("proxy agent ensured" if _is_compiled() else "proxy agent is compiled-binary only (no-op here)")
+        return
+    if action in ("off", "uninstall"):
+        remove_proxy_agent()
+        ok("proxy agent removed " + dim("· launchd job booted out and disabled"))
+        return
+    if action == "mode":
+        val = getattr(args, "value", None)
+        if not val:
+            info(_proxy_mode()); return
+        try:
+            _proxy_set_mode(val)
+        except ValueError as e:
+            die(str(e))
+        ok(f"proxy mode → {clay(val)} " + dim("· reaches running sessions on their next request"))
+        return
+    # status
+    pid = _proxy_pid()
+    mode = _proxy_mode()
+    info()
+    info(IND + bold(clay("Proxy")) + dim("   ·   always-on local indirection point"))
+    info()
+    if pid:
+        dot = green("●") if mode == "swap" else yellow("◐")
+        info(IND + dot + " running " + dim(f"(pid {pid}) · mode {mode}"))
+    else:
+        info(IND + dim("○") + " " + dim(f"not running · mode {mode}"))
+    hint("agent label " + clay(PROXY_LABEL))
+    info()
+
 def _pool_start(args):
+    # Also record the desired mode in the proxy flag so the always-on daemon (once
+    # wired at install, Phase 3) starts swapping. Best-effort: the legacy daemon
+    # below ignores proxy.json, so this is additive and never breaks the old flow.
+    try: _proxy_set_mode("swap")
+    except Exception: pass
     # A joined shared pool is served by default; --local forces the Keychain pool.
     cfg = None if getattr(args, "local", False) else _remote_config()
     if cfg:
@@ -2881,6 +3172,9 @@ def _pool_hard_kill(pid):
         pass
 
 def _pool_stop(args):
+    # Flip the proxy flag back to the transparent floor (additive; see _pool_start).
+    try: _proxy_set_mode("passthrough")
+    except Exception: pass
     pid = _pool_pid()
     _unwire_base_url()
     info()
@@ -4592,6 +4886,17 @@ def build_parser():
                     help="serve the local-Keychain pool even if a shared pool is joined")
     pl.set_defaults(func=cmd_pool)
 
+    # always-on proxy agent (launchd). `serve` is the launchd entrypoint; the rest
+    # manage the agent. Hidden from the help banner while it's phase-gated.
+    px = sub.add_parser("proxy", help=argparse.SUPPRESS)
+    px.add_argument("action", nargs="?", default="status",
+                    choices=["serve", "ensure", "off", "uninstall", "status", "mode"])
+    px.add_argument("value", nargs="?",
+                    help="for `proxy mode`: swap | passthrough (omit to print current)")
+    px.add_argument("--port", type=int,
+                    help=f"port to listen on (default {DEFAULT_POOL_PORT})")
+    px.set_defaults(func=cmd_proxy)
+
     se = sub.add_parser("session",
                         help="run one Claude Code session pinned to an account (global login unchanged)")
     se.add_argument("account", help="saved account to pin this session to")
@@ -4903,6 +5208,87 @@ def ensure_analytics_agent():
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
         subprocess.run(["launchctl", "bootstrap", "gui/%d" % uid, ANALYTICS_PLIST],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        pass
+
+# ── proxy launchd agent (mirrors the analytics agent above) ────────────────
+
+def _proxy_plist_xml(exe, port):
+    """launchd plist for the always-on proxy agent.
+
+    RunAtLoad → start at login (survives reboot); KeepAlive true → relaunch on ANY
+    exit (crash, kill -9, OOM) within launchd's throttle window; ProcessType
+    Interactive (latency-sensitive, unlike the nice'd analytics agent). PYTHONUTF8/
+    LANG set because launchd starts agents with no locale."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0"><dict>\n'
+        '  <key>Label</key><string>%s</string>\n'
+        '  <key>ProgramArguments</key><array>'
+        '<string>%s</string><string>proxy</string><string>serve</string>'
+        '<string>--port</string><string>%d</string></array>\n'
+        '  <key>RunAtLoad</key><true/>\n'
+        '  <key>KeepAlive</key><true/>\n'
+        '  <key>ThrottleInterval</key><integer>10</integer>\n'
+        '  <key>ProcessType</key><string>Interactive</string>\n'
+        '  <key>EnvironmentVariables</key><dict>'
+        '<key>PYTHONUTF8</key><string>1</string>'
+        '<key>LANG</key><string>en_US.UTF-8</string></dict>\n'
+        '  <key>StandardOutPath</key><string>%s</string>\n'
+        '  <key>StandardErrorPath</key><string>%s</string>\n'
+        '</dict></plist>\n'
+        % (PROXY_LABEL, exe, port, PROXY_LOG, PROXY_LOG)
+    )
+
+def ensure_proxy_agent(port=DEFAULT_POOL_PORT):
+    """Idempotently install/repair the proxy launchd agent. No-op if the kill-switch
+    is set or this isn't the compiled binary. Rewrites+re-bootstraps only when the
+    plist content changes (self-heals across version/port changes). Never raises.
+    NOT auto-called from main() — invoked only by explicit `proxy` commands / install."""
+    if _proxy_off() or not _is_compiled():
+        return
+    try:
+        exe = _self_path()
+        if not exe or not os.path.exists(exe):
+            return
+        want = _proxy_plist_xml(exe, port)
+        try:
+            with open(PROXY_PLIST, encoding="utf-8") as f:
+                if f.read() == want:
+                    return                      # already current — fast path
+        except OSError:
+            pass                                # missing → (re)install below
+        os.makedirs(os.path.dirname(PROXY_PLIST), exist_ok=True)
+        os.makedirs(STORE_DIR, exist_ok=True)
+        tmp = PROXY_PLIST + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(want)
+        os.replace(tmp, PROXY_PLIST)
+        uid = os.getuid()
+        subprocess.run(["launchctl", "enable", "gui/%d/%s" % (uid, PROXY_LABEL)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        # bootout an old definition first (ignore errors), then (re)bootstrap.
+        subprocess.run(["launchctl", "bootout", "gui/%d/%s" % (uid, PROXY_LABEL)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        subprocess.run(["launchctl", "bootstrap", "gui/%d" % uid, PROXY_PLIST],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        pass
+
+def remove_proxy_agent():
+    """Fully tear the agent down: bootout (kills the process — KeepAlive can't fight
+    bootout), disable (no relaunch at next login), remove the plist. Never raises."""
+    try:
+        uid = os.getuid()
+        subprocess.run(["launchctl", "bootout", "gui/%d/%s" % (uid, PROXY_LABEL)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        subprocess.run(["launchctl", "disable", "gui/%d/%s" % (uid, PROXY_LABEL)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        try:
+            os.remove(PROXY_PLIST)
+        except OSError:
+            pass
     except Exception:
         pass
 
