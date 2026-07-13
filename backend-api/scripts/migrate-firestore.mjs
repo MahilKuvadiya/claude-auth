@@ -27,6 +27,10 @@ async function run() {
   for (const p of pools.docs) {
     const d = p.data();
     if (!DRY) {
+      // Ensure the referenced Org exists first (Pool.orgId → Org.id FK).
+      if (d.orgId) {
+        await prisma.org.upsert({ where: { id: d.orgId }, create: { id: d.orgId, name: d.orgId }, update: {} });
+      }
       await prisma.pool.upsert({
         where: { id: p.id },
         create: { id: p.id, orgId: d.orgId || null, name: d.name || p.id, mode: d.mode || 'failover', status: d.status || 'active', createdBy: d.createdBy || null, createdAt: ts(d.createdAt) || undefined },
