@@ -11,7 +11,7 @@ const cfg = {
 export const app = initializeApp(cfg);
 export const auth = getAuth(app);
 
-// Auth is Google/email-password: org-admin accounts are provisioned by the operator
-// (see backend/provision-admin.mjs). No self-serve sign-up. All data now flows through
-// the unified REST API (backend-api) — no direct Firestore access from the client.
+// Auth is Google/email-password (identity only). Roles are resolved SERVER-SIDE from
+// Postgres via GET /v1/me (admin bootstrap = the API's ADMIN_EMAILS). No self-serve
+// sign-up. All data flows through the unified REST API (backend-api) — no Firestore.
 export const API_URL = (import.meta.env.VITE_API_URL as string || '').replace(/\/$/, '');

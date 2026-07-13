@@ -5,7 +5,9 @@
   "description": "claudex unified REST API (v1) — pool control-plane + data-plane. One Fastify service on Cloud Run.",
   "type": "module",
   "main": "src/index.js",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "postinstall": "prisma generate",
     "start": "node src/index.js",
