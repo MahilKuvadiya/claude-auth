@@ -12,6 +12,7 @@ import poolsRoutes from './routes/control/pools.js';
 import membersRoutes from './routes/control/members.js';
 import rollupsRoutes from './routes/control/rollups.js';
 import joinLinksRoutes from './routes/control/joinLinks.js';
+import adminRoutes from './routes/control/admin.js';
 import joinRoute from './routes/data/join.js';
 import tokenRoute from './routes/data/token.js';
 import telemetryRoute from './routes/data/telemetry.js';
@@ -56,6 +57,7 @@ export async function buildServer(opts = {}) {
   await app.register(membersRoutes);
   await app.register(rollupsRoutes);
   await app.register(joinLinksRoutes);
+  await app.register(adminRoutes);
   await app.register(joinRoute);
   await app.register(tokenRoute);
   await app.register(telemetryRoute);

@@ -10,7 +10,7 @@ function shapePool(p) {
 export default async function poolsRoutes(app) {
   // GET /v1/pools — list the actor's org pools
   app.get('/v1/pools', { preHandler: authFirebase }, async (req) => {
-    const where = req.actor.role === 'org_admin' && req.actor.orgId ? { orgId: req.actor.orgId } : {};
+    const where = req.actor.role === 'pod_lead' && req.actor.orgId ? { orgId: req.actor.orgId } : {};
     const pools = await prisma.pool.findMany({ where });
     return { pools: pools.map(shapePool) };
   });

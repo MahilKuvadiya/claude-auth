@@ -27,6 +27,10 @@ export const config = {
   host: process.env.HOST || '0.0.0.0',
   // CORS allowlist for the dashboard SPA (comma-separated origins, or '*')
   dashboardOrigins: (process.env.DASHBOARD_ORIGIN || '*').split(',').map((s) => s.trim()),
+  // Bootstrap admins: these emails are always role=admin regardless of the AnalyticsUser
+  // row (solves the chicken-and-egg — someone must be able to grant roles first).
+  adminEmails: (process.env.ADMIN_EMAILS || 'vishal.makwana@devxlabs.ai')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   // Shared secret the internal poll-usage route requires (Cloud Scheduler → OIDC in prod)
   internalToken: process.env.INTERNAL_TOKEN || '',
   logLevel: process.env.LOG_LEVEL || 'info',
