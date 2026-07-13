@@ -9,13 +9,12 @@ function req(name, fallback) {
 
 export const config = {
   project: req('GCP_PROJECT', 'yash-test-495112'),
-  database: req('FIRESTORE_DB', 'claude-pool'),
   location: req('KMS_LOCATION', 'asia-south1'),
-  kmsKey: process.env.KMS_KEY
-    || `projects/${req('GCP_PROJECT', 'yash-test-495112')}/locations/${req('KMS_LOCATION', 'asia-south1')}/keyRings/claude-pool/cryptoKeys/refresh-tokens`,
   usageTopic: req('USAGE_TOPIC', 'claude-pool-usage'),
+  // Member/analytics JWT signing key. Cloud Run injects JWT_SECRET pointing at
+  // claudex-jwt-<env>; the fallback is for local dev only.
   jwtSecretName: process.env.JWT_SECRET
-    || `projects/${req('GCP_PROJECT', 'yash-test-495112')}/secrets/claudex-member-jwt/versions/latest`,
+    || `projects/${req('GCP_PROJECT', 'yash-test-495112')}/secrets/claudex-jwt-uat/versions/latest`,
 
   // Anthropic OAuth (public client id — not a secret)
   oauthTokenUrl: process.env.OAUTH_TOKEN_URL || 'https://platform.claude.com/v1/oauth/token',
@@ -28,6 +27,15 @@ export const config = {
   host: process.env.HOST || '0.0.0.0',
   // CORS allowlist for the dashboard SPA (comma-separated origins, or '*')
   dashboardOrigins: (process.env.DASHBOARD_ORIGIN || '*').split(',').map((s) => s.trim()),
+  // Bootstrap admins: these emails are always role=admin regardless of the AnalyticsUser
+  // row (solves the chicken-and-egg — someone must be able to grant roles first).
+  adminEmails: (process.env.ADMIN_EMAILS || 'vishal.makwana@devxlabs.ai')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  // Analytics auto-enrollment: the collector proves org membership with this shared key
+  // (embedded by the installer). Optional email-domain allowlist restricts who may enroll.
+  enrollKey: process.env.ENROLL_KEY || '',
+  enrollDomains: (process.env.ENROLL_DOMAINS || 'devxlabs.ai')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   // Shared secret the internal poll-usage route requires (Cloud Scheduler → OIDC in prod)
   internalToken: process.env.INTERNAL_TOKEN || '',
   logLevel: process.env.LOG_LEVEL || 'info',

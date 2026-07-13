@@ -1,0 +1,186 @@
+// claudex Postgres schema (Prisma). Replaces Firestore for pool/admin + adds RBAC + session analytics.
+// Token totals use BigInt (cache-read lifetime totals can exceed 2^31); the API serializes BigInt → Number/string.
+
+generator client {
+  provider      = "prisma-client-js"
+  // Bundle the query engine for the distroless runtime (debian12 = openssl 3.0.x),
+  // plus the local dev platform. Without this, the image ships only the build host's
+  // engine and the container crashes at boot on Cloud Run.
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── Pool (ported from Firestore) ───────────────────────────
+model Org {
+  id        String   @id
+  name      String?
+  domain    String?
+  createdAt DateTime @default(now())
+  pools     Pool[]
+  users     AnalyticsUser[]
+  pods      Pod[]
+}
+
+model Pool {
+  id        String     @id // pl_xxxx
+  orgId     String?
+  org       Org?       @relation(fields: [orgId], references: [id])
+  name      String
+  mode      String     @default("failover") // failover | balance
+  status    String     @default("active")
+  createdBy String?
+  createdAt DateTime   @default(now())
+  members   Member[]
+  joinLinks JoinLink[]
+  rollups   Rollup[]
+}
+
+model Member {
+  poolId           String
+  memberId         String // account uuid or email prefix
+  pool             Pool      @relation(fields: [poolId], references: [id])
+  email            String?
+  accountUuid      String?
+  poolRole         String    @default("member")
+  status           String    @default("active") // active | resting | revoked
+  secretRef        String? // Secret Manager ref for the refresh token (never stored here)
+  accessToken      String? // cached minted access token
+  accessExpiresAt  DateTime?
+  subscriptionType String?
+  rateLimit        Json?
+  joinedAt         DateTime  @default(now())
+  revokedAt        DateTime?
+  revokedBy        String?
+
+  @@id([poolId, memberId])
+}
+
+model JoinLink {
+  token       String    @id // jt_xxxx
+  poolId      String
+  pool        Pool      @relation(fields: [poolId], references: [id])
+  targetEmail String
+  role        String    @default("member")
+  createdBy   String?
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime?
+  usedAt      DateTime?
+  memberId    String?
+
+  @@index([poolId])
+}
+
+model Rollup {
+  poolId     String
+  period     String // YYYY-MM-DD
+  pool       Pool     @relation(fields: [poolId], references: [id])
+  tokensIn   BigInt   @default(0)
+  tokensOut  BigInt   @default(0)
+  cacheRead  BigInt   @default(0)
+  cacheWrite BigInt   @default(0)
+  requests   BigInt   @default(0)
+  byMember   Json? // { memberId: { consumed:{…}, contributed:{…} } }
+  updatedAt  DateTime @updatedAt
+
+  @@id([poolId, period])
+}
+
+// ─────────────────────────── RBAC: users, roles, pods ───────────────────────────
+enum Role {
+  admin
+  pod_lead
+  member
+}
+
+model AnalyticsUser {
+  email          String          @id
+  role           Role            @default(member)
+  orgId          String?
+  org            Org?            @relation(fields: [orgId], references: [id])
+  name           String?
+  createdAt      DateTime        @default(now())
+  ledPods        Pod[]           @relation("PodLead")
+  podMemberships PodMembership[]
+  sessions       Session[]
+  syncStates     SyncState[]
+}
+
+model Pod {
+  id        String          @id @default(cuid())
+  name      String
+  orgId     String?
+  org       Org?            @relation(fields: [orgId], references: [id])
+  leadEmail String
+  lead      AnalyticsUser   @relation("PodLead", fields: [leadEmail], references: [email])
+  members   PodMembership[]
+  createdAt DateTime        @default(now())
+}
+
+model PodMembership {
+  podId     String
+  userEmail String
+  pod       Pod           @relation(fields: [podId], references: [id])
+  user      AnalyticsUser @relation(fields: [userEmail], references: [email])
+
+  @@id([podId, userEmail])
+  @@index([podId])
+}
+
+// ─────────────────────────── Session analytics ───────────────────────────
+model Session {
+  id                String        @id // Claude Code session id
+  userEmail         String
+  user              AnalyticsUser @relation(fields: [userEmail], references: [email])
+  project           String?
+  gitBranch         String?
+  model             String?
+  startedAt         DateTime?
+  endedAt           DateTime?
+  msgCount          Int           @default(0)
+  inputTokens       BigInt        @default(0)
+  outputTokens      BigInt        @default(0)
+  cacheReadTokens   BigInt        @default(0)
+  cacheCreateTokens BigInt        @default(0)
+  costUsd           Float         @default(0)
+  messages          Message[]
+
+  @@index([userEmail])
+  @@index([project])
+  @@index([startedAt])
+}
+
+model Message {
+  uuid              String    @id // message uuid from the transcript
+  sessionId         String
+  session           Session   @relation(fields: [sessionId], references: [id])
+  role              String // user | assistant
+  seq               Int
+  text              String?   @db.Text // prompt or response text (admin-only via API)
+  thinking          String?   @db.Text
+  model             String?
+  ts                DateTime?
+  durationMs        Int?
+  inputTokens       Int       @default(0)
+  outputTokens      Int       @default(0)
+  cacheReadTokens   Int       @default(0)
+  cacheCreateTokens Int       @default(0)
+  toolNames         String[]
+  isSidechain       Boolean   @default(false)
+
+  @@index([sessionId])
+}
+
+model SyncState {
+  userEmail  String
+  filePath   String
+  byteOffset BigInt        @default(0)
+  mtime      Float?
+  lastSyncAt DateTime      @updatedAt
+  user       AnalyticsUser @relation(fields: [userEmail], references: [email])
+
+  @@id([userEmail, filePath])
+}

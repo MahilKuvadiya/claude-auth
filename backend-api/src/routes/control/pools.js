@@ -1,20 +1,18 @@
 import crypto from 'node:crypto';
-import { FieldValue } from '@google-cloud/firestore';
-import { db } from '../../lib/clients.js';
+import { prisma } from '../../lib/clients.js';
 import { authFirebase } from '../../plugins/auth.js';
 import { assertPoolInOrg } from '../../lib/authz.js';
 
-function shapePool(id, d) {
-  return { id, name: d.name, mode: d.mode || 'failover', status: d.status || 'active', orgId: d.orgId || null };
+function shapePool(p) {
+  return { id: p.id, name: p.name, mode: p.mode || 'failover', status: p.status || 'active', orgId: p.orgId || null };
 }
 
 export default async function poolsRoutes(app) {
   // GET /v1/pools — list the actor's org pools
   app.get('/v1/pools', { preHandler: authFirebase }, async (req) => {
-    let q = db.collection('pools');
-    if (req.actor.role === 'org_admin' && req.actor.orgId) q = q.where('orgId', '==', req.actor.orgId);
-    const snap = await q.get();
-    return { pools: snap.docs.map((d) => shapePool(d.id, d.data())) };
+    const where = req.actor.role === 'pod_lead' && req.actor.orgId ? { orgId: req.actor.orgId } : {};
+    const pools = await prisma.pool.findMany({ where });
+    return { pools: pools.map(shapePool) };
   });
 
   // POST /v1/pools — create
@@ -29,20 +27,22 @@ export default async function poolsRoutes(app) {
   }, async (req, reply) => {
     const { name, mode } = req.body;
     const id = 'pl_' + crypto.randomBytes(5).toString('hex');
-    const doc = {
-      orgId: req.actor.orgId || null, name, mode: mode === 'balance' ? 'balance' : 'failover',
-      status: 'active', createdBy: req.actor.uid, createdAt: FieldValue.serverTimestamp(),
-    };
-    await db.collection('pools').doc(id).set(doc);
+    const pool = await prisma.pool.create({
+      data: {
+        id, orgId: req.actor.orgId || null, name,
+        mode: mode === 'balance' ? 'balance' : 'failover',
+        status: 'active', createdBy: req.actor.uid,
+      },
+    });
     reply.code(201);
-    return shapePool(id, doc);
+    return shapePool(pool);
   });
 
   // GET /v1/pools/:id
   app.get('/v1/pools/:id', { preHandler: authFirebase }, async (req) => {
-    const snap = await db.collection('pools').doc(req.params.id).get();
-    if (!snap.exists) throw Object.assign(new Error('pool not found'), { statusCode: 404, code: 'not_found' });
-    assertPoolInOrg(req.actor, snap.data());
-    return shapePool(snap.id, snap.data());
+    const pool = await prisma.pool.findUnique({ where: { id: req.params.id } });
+    if (!pool) throw Object.assign(new Error('pool not found'), { statusCode: 404, code: 'not_found' });
+    assertPoolInOrg(req.actor, pool);
+    return shapePool(pool);
   });
 }
