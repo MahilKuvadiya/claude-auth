@@ -3,6 +3,13 @@ name: release-please
 on:
   push:
     branches: [main]
+  # Manual recovery/publish: re-ship a given tag's binary without needing release-please
+  # to re-detect a release (e.g. after a transient GitHub 5xx skipped the publish job).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to (re)publish, e.g. v2.2.0"
+        required: true
 
 permissions:
   contents: write
@@ -10,6 +17,7 @@ permissions:
 
 jobs:
   release-please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -28,13 +36,18 @@ jobs:
   # GCS bucket. Runs only when a Release PR is merged (a real release).
   publish:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    # Runs after a real release (push) OR a manual dispatch. `always()` lets it run even
+    # when release-please was skipped (dispatch path).
+    if: ${{ always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: macos-14          # Apple Silicon (arm64) — sets the binary's macOS floor
     permissions:
       contents: read
       id-token: write          # required for keyless Workload Identity Federation
     steps:
       - uses: actions/checkout@v4
+        with:
+          # On dispatch, build the exact released code at that tag.
+          ref: ${{ github.event.inputs.tag || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -51,7 +64,10 @@ jobs:
         run: make dist
 
       - name: Write VERSION marker
-        run: printf '%s' "${{ needs.release-please.outputs.version }}" > dist/VERSION
+        env:
+          TAG: ${{ github.event.inputs.tag || needs.release-please.outputs.tag_name }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: printf '%s' "${VERSION:-${TAG#v}}" > dist/VERSION
 
       - id: auth
         name: Authenticate to GCP (keyless / WIF)
@@ -64,7 +80,7 @@ jobs:
 
       - name: Publish to the public distribution bucket
         env:
-          TAG: ${{ needs.release-please.outputs.tag_name }}
+          TAG: ${{ github.event.inputs.tag || needs.release-please.outputs.tag_name }}
         run: |
           set -euo pipefail
           # versioned (immutable) copy
