@@ -8,6 +8,11 @@ variable "project_number" {
   default = "632653045864"
 }
 
+variable "region" {
+  type    = string
+  default = "asia-south1"
+}
+
 variable "github_repo" {
   type    = string
   default = "vishalmakwana111/claudex"
