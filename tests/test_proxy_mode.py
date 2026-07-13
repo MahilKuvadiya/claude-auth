@@ -69,6 +69,18 @@ class StateFlag(_TmpState):
         cx._proxy_set_mode("swap")               # external writer flips it
         self.assertEqual(cx._proxy_mode(), "swap")   # mtime changed → cache refreshed
 
+    def test_rapid_writes_same_mtime_still_consistent(self):
+        # Regression (found in Docker on a coarse-mtime fs): two sets within one mtime
+        # tick must both be reflected by this process. Simulate a warm cache whose
+        # mtime already equals the file's, so ONLY the writer's direct cache update
+        # can keep _proxy_mode correct.
+        cx._proxy_set_mode("passthrough")
+        cx._MODE_CACHE["mtime"] = os.stat(cx.PROXY_STATE).st_mtime   # warm, matching mtime
+        cx._MODE_CACHE["mode"] = "passthrough"
+        cx._proxy_set_mode("swap")               # must refresh the cache itself, not via mtime
+        self.assertEqual(cx._MODE_CACHE["mode"], "swap")
+        self.assertEqual(cx._proxy_mode(), "swap")
+
 
 class SupervisedRouting(_TmpState):
     """Drive the real handler with PROXY_SUPERVISED, proving routing follows the

@@ -2133,6 +2133,14 @@ def _proxy_set_mode(mode):
     if mode not in PROXY_MODES:
         raise ValueError(f"mode must be one of {PROXY_MODES}")
     _proxy_state_write(mode=mode)
+    # Update our own cache directly — don't rely on mtime to signal a change we just
+    # made (coarse-mtime filesystems can land two writes in the same tick, leaving a
+    # reader stale). Cross-process readers (the daemon) still refresh via mtime.
+    try:
+        _MODE_CACHE["mtime"] = os.stat(PROXY_STATE).st_mtime
+    except OSError:
+        _MODE_CACHE["mtime"] = -1.0        # force a re-read next call
+    _MODE_CACHE["mode"] = mode
 
 def _proxy_state_delete(*keys):
     """Remove keys from proxy.json (atomic). Used by unwire to drop the captured
