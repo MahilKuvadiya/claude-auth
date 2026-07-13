@@ -63,17 +63,22 @@ jobs:
           workload_identity_provider: projects/632653045864/locations/global/workloadIdentityPools/github-pool/providers/github-provider
           service_account: claudex-deployer@yash-test-495112.iam.gserviceaccount.com
       - uses: google-github-actions/setup-gcloud@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: "npm", cache-dependency-path: backend-api/package-lock.json }
+      - run: npm ci                            # local, pinned Prisma (not npx-latest)
 
       - name: Run DB migrations (Cloud SQL proxy)
         run: |
+          set -euo pipefail
           ENV=${{ steps.env.outputs.name }}
           curl -sSL -o /tmp/proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
           chmod +x /tmp/proxy
           /tmp/proxy --port 5432 "$CLOUDSQL" & PROXY_PID=$!
           sleep 6
           # Reuse the runtime DATABASE_URL secret, but point it at the local proxy.
-          URL=$(gcloud secrets versions access latest --secret="claudex-dburl-$ENV" --project "$PROJECT" \
-                | sed -E 's#@localhost/#@127.0.0.1:5432/#; s#\?host=[^&]*&?##; s#&?sslmode=disable##')
+          RAW=$(gcloud secrets versions access latest --secret="claudex-dburl-$ENV" --project "$PROJECT")
+          URL=$(printf '%s' "$RAW" | sed -E 's#@localhost/#@127.0.0.1:5432/#; s#\?host=[^&]*&?##; s#&?sslmode=disable##')
+          test -n "$URL" || { echo "::error::DATABASE_URL for $ENV resolved empty (secret access?)"; exit 1; }
           DATABASE_URL="$URL" npx prisma migrate deploy
           kill $PROXY_PID || true
 
