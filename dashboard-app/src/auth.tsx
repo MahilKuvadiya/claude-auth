@@ -3,6 +3,7 @@ import {
   onIdTokenChanged, signInWithEmailAndPassword, sendPasswordResetEmail, signOut, User,
 } from 'firebase/auth';
 import { auth } from './firebase';
+import { fetchMe } from './api';
 
 interface AuthState {
   user: User | null;
@@ -32,7 +33,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () =>
       onIdTokenChanged(auth, async (u) => {
         setUser(u);
-        setRole(u ? ((await u.getIdTokenResult()).claims.role as string) ?? null : null);
+        // Role is resolved SERVER-SIDE from Postgres (never the Firebase claim).
+        if (u) {
+          try { setRole((await fetchMe()).role); }
+          catch { setRole('member'); }
+        } else {
+          setRole(null);
+        }
         setLoading(false);
       }),
     [],
@@ -58,7 +65,7 @@ export const useAuth = () => {
   return c;
 };
 
-/** Only org admins / pod leads get in. Everyone else sees a clear message. */
-export function isAdmin(role: string | null) {
-  return role === 'org_admin' || role === 'pod_lead';
-}
+/** admin can see everything (incl. session content). */
+export const isAdmin = (role: string | null) => role === 'admin';
+/** admin + pod_lead can manage pools and see others' metrics. */
+export const isElevated = (role: string | null) => role === 'admin' || role === 'pod_lead';

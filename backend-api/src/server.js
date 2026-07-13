@@ -8,6 +8,7 @@ import { installErrorHandlers } from './plugins/errors.js';
 
 import healthRoutes from './routes/health.js';
 import openapiRoutes from './routes/openapi.js';
+import meRoutes from './routes/me.js';
 import poolsRoutes from './routes/control/pools.js';
 import membersRoutes from './routes/control/members.js';
 import rollupsRoutes from './routes/control/rollups.js';
@@ -57,6 +58,7 @@ export async function buildServer(opts = {}) {
   // routes
   await app.register(healthRoutes);
   await app.register(openapiRoutes);
+  await app.register(meRoutes);
   await app.register(poolsRoutes);
   await app.register(membersRoutes);
   await app.register(rollupsRoutes);

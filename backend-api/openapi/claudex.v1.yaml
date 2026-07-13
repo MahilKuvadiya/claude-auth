@@ -379,6 +379,15 @@ paths:
                 properties: { ok: { type: boolean }, ingested: { type: integer } }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/me:
+    get:
+      tags: [analytics]
+      summary: The caller's server-resolved identity + role
+      security: [{ firebaseIdToken: [] }]
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   # ---- Admin: user/role + pod management (admin role only) ----
   /v1/admin/users:
     get:
