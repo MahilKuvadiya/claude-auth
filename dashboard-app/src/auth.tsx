@@ -1,69 +1,68 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import {
-  onIdTokenChanged, GoogleAuthProvider, signInWithPopup, signOut, User,
-} from 'firebase/auth';
-import { auth, firebaseError } from './firebase';
 import { fetchMe } from './api';
+import { GOOGLE_CLIENT_ID, ALLOWED_DOMAIN } from './lib/env';
+import {
+  getToken, setToken, subscribe, decodeJwt, isExpired, initGoogle, whenGoogleReady, googleSignOut,
+} from './lib/googleAuth';
 import { E2E, e2eEmail, e2eRole } from './lib/e2e';
 
-const ALLOWED_DOMAIN = (import.meta.env.VITE_ALLOWED_DOMAIN as string) || 'devxlabs.ai';
+interface DashUser { email: string; name?: string; picture?: string }
 
 interface AuthState {
-  user: User | null;
+  user: DashUser | null;
   role: string | null;
   loading: boolean;
   error: string | null;
-  signInWithGoogle: () => Promise<void>;
-  logout: () => Promise<void>;
+  logout: () => void;
 }
 const Ctx = createContext<AuthState | null>(null);
 
+/** Sign-in is missing config if there's no OAuth client id (outside E2E). */
+export const NEEDS_CONFIG = !E2E && !GOOGLE_CLIENT_ID;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<DashUser | null>(null);
   const [role, setRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (E2E) {
-      setUser({ email: e2eEmail(), displayName: e2eRole() } as unknown as User);
+      setUser({ email: e2eEmail(), name: e2eRole() });
       setRole(e2eRole());
       setLoading(false);
       return;
     }
-    if (firebaseError) { setLoading(false); return; } // App shows a config screen
-    return onIdTokenChanged(auth, async (u) => {
-      setUser(u);
-      // Role is resolved SERVER-SIDE from Postgres (never the Firebase claim).
-      if (u) {
-        try { setRole((await fetchMe()).role); }
-        catch { setRole('member'); }
+    if (NEEDS_CONFIG) { setLoading(false); return; }
+
+    // Load the identity for the current token (or clear if bad/wrong-domain/expired).
+    const load = async (t: string | null) => {
+      if (t && !isExpired(t)) {
+        const p = decodeJwt(t);
+        const email = String(p?.email || '').toLowerCase();
+        if (ALLOWED_DOMAIN && !email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+          setError(`Use your @${ALLOWED_DOMAIN} account.`);
+          googleSignOut(); setUser(null); setRole(null); setLoading(false);
+          return;
+        }
+        setUser({ email, name: p?.name, picture: p?.picture });
+        try { setRole((await fetchMe()).role); } catch { setRole('member'); }
       } else {
-        setRole(null);
+        if (t) setToken(null); // expired
+        setUser(null); setRole(null);
       }
       setLoading(false);
-    });
+    };
+
+    const unsub = subscribe((t) => { setError(null); load(t); });
+    whenGoogleReady(() => { initGoogle(); });
+    load(getToken());
+    return unsub;
   }, []);
 
-  const signInWithGoogle = async () => {
-    setError(null);
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ hd: ALLOWED_DOMAIN, prompt: 'select_account' });
-    try {
-      const res = await signInWithPopup(auth, provider);
-      const email = res.user.email || '';
-      if (ALLOWED_DOMAIN && !email.toLowerCase().endsWith(`@${ALLOWED_DOMAIN}`)) {
-        await signOut(auth);
-        setError(`Use your @${ALLOWED_DOMAIN} account.`);
-      }
-    } catch (e) {
-      const code = (e as { code?: string }).code || '';
-      if (!code.includes('popup-closed') && !code.includes('cancelled')) setError('Sign-in failed. Please try again.');
-    }
-  };
-  const logout = () => signOut(auth);
+  const logout = () => { googleSignOut(); setUser(null); setRole(null); };
 
-  return <Ctx.Provider value={{ user, role, loading, error, signInWithGoogle, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, role, loading, error, logout }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => {

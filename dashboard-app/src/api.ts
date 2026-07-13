@@ -1,4 +1,5 @@
-import { auth, API_URL } from './firebase';
+import { API_URL } from './lib/env';
+import { getToken } from './lib/googleAuth';
 import { E2E } from './lib/e2e';
 import {
   Pool, Member, Rollup, JoinLink,
@@ -10,9 +11,9 @@ import {
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let token = 'e2e';
   if (!E2E) {
-    const user = auth.currentUser;
-    if (!user) throw new Error('not signed in');
-    token = await user.getIdToken();
+    const t = getToken();
+    if (!t) throw new Error('not signed in');
+    token = t;
   }
   const res = await fetch(`${API_URL}${path}`, {
     ...init,

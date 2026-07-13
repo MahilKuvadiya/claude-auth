@@ -19,10 +19,13 @@ mock.module('../../src/lib/secrets.js', {
     writeRefreshToken: async () => {}, readRefreshToken: async () => 'rt', deleteMemberSecret: async () => {},
   },
 });
-mock.module('firebase-admin', {
-  defaultExport: {
-    apps: [{}], initializeApp: () => {},
-    auth: () => ({ verifyIdToken: async (t) => JSON.parse(Buffer.from(t, 'base64').toString('utf8')) }),
+mock.module('google-auth-library', {
+  namedExports: {
+    OAuth2Client: class {
+      async verifyIdToken({ idToken }) {
+        return { getPayload: () => JSON.parse(Buffer.from(idToken, 'base64').toString('utf8')) };
+      }
+    },
   },
 });
 
