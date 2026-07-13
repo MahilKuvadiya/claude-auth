@@ -4,6 +4,15 @@ All notable changes are documented here. This file is maintained automatically b
 [release-please](https://github.com/googleapis/release-please) from Conventional Commit
 messages; the entry below the header is the pre-automation baseline.
 
+## [2.2.1](https://github.com/vishalmakwana111/claudex/compare/v2.2.0...v2.2.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* **analytics:** force UTF-8 for the launchd collector ([44d5e20](https://github.com/vishalmakwana111/claudex/commit/44d5e2070f8300170935f14a126a78fa0b0c1719))
+* **analytics:** force UTF-8 for the launchd collector ([9020e73](https://github.com/vishalmakwana111/claudex/commit/9020e730b9716ffbdf48123709a325c69195f2ac))
+* **analytics:** UTF-8 for launchd collector (2.2.1) ([6ec48be](https://github.com/vishalmakwana111/claudex/commit/6ec48be709b24778684f78f934812853044c8bcc))
+
 ## [2.2.0](https://github.com/vishalmakwana111/claudex/compare/v2.1.1...v2.2.0) (2026-07-13)
 
 
