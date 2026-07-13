@@ -61,13 +61,22 @@ for (const role of ['member', 'pod_lead', 'admin'] as Role[]) {
   });
 }
 
-test('admin can open the leaderboard and sessions explorer', async ({ page }) => {
+test('admin: leaderboard lists users; sessions lists users first', async ({ page }) => {
   await mockApi(page, 'admin');
   await gotoAs(page, 'admin', '/team');
   await expect(page.getByRole('heading', { name: 'Leaderboard' })).toBeVisible();
   await expect(page.getByText('Ada Admin')).toBeVisible();
 
+  // Sessions now shows a user list first (pick a user → their sessions)
   await gotoAs(page, 'admin', '/sessions');
   await expect(page.getByRole('heading', { name: 'Sessions' })).toBeVisible();
-  await expect(page.getByText('total', { exact: false })).toBeVisible();
+  await expect(page.getByText('Pick a user', { exact: false })).toBeVisible();
+  await expect(page.getByText('Leo Lead')).toBeVisible();
+});
+
+test('admin: leaderboard row drills into per-user analytics', async ({ page }) => {
+  await mockApi(page, 'admin');
+  await gotoAs(page, 'admin', '/users/ic1@devxlabs.ai');
+  await expect(page.getByRole('heading', { name: 'ic1@devxlabs.ai' })).toBeVisible();
+  await expect(page.getByText('Est. cost', { exact: true })).toBeVisible(); // analytics rendered
 });

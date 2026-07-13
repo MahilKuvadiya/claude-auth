@@ -33,23 +33,23 @@ const qs = (o: Record<string, string | number | undefined>) => {
 // ---- identity ----
 export const fetchMe = async (): Promise<Me> => Me.parse(await api('/v1/me'));
 
-// ---- analytics ----
-export const fetchSummary = async (days = 30): Promise<Summary> =>
-  Summary.parse(await api(`/v1/analytics/summary${qs({ days })}`));
+// ---- analytics ---- (optional `user` scopes to one user; admin/allowed only)
+export const fetchSummary = async (days = 30, user?: string): Promise<Summary> =>
+  Summary.parse(await api(`/v1/analytics/summary${qs({ days, user })}`));
 
 export async function fetchLeaderboard(days = 30): Promise<UserRow[]> {
   const { users } = await api<{ users: unknown[] }>(`/v1/analytics/users${qs({ days })}`);
   return users.map((u) => UserRow.parse(u));
 }
 
-export async function fetchActivity(days = 30): Promise<ActivityPoint[]> {
-  const { activity } = await api<{ activity: unknown[] }>(`/v1/analytics/activity${qs({ days })}`);
+export async function fetchActivity(days = 30, user?: string): Promise<ActivityPoint[]> {
+  const { activity } = await api<{ activity: unknown[] }>(`/v1/analytics/activity${qs({ days, user })}`);
   return activity.map((a) => ActivityPoint.parse(a));
 }
 
 export type BreakdownDim = 'model' | 'project' | 'tool' | 'weekday' | 'hour';
-export async function fetchBreakdown(by: BreakdownDim, days = 30): Promise<BreakdownItem[]> {
-  const { items } = await api<{ items: unknown[] }>(`/v1/analytics/breakdown${qs({ by, days })}`);
+export async function fetchBreakdown(by: BreakdownDim, days = 30, user?: string): Promise<BreakdownItem[]> {
+  const { items } = await api<{ items: unknown[] }>(`/v1/analytics/breakdown${qs({ by, days, user })}`);
   return items.map((i) => BreakdownItem.parse(i));
 }
 

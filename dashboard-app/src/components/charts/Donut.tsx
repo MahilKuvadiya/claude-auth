@@ -6,8 +6,8 @@ import { tealSpread, ChartState, ReportTooltip } from '@/lib/chart-theme';
 import { fmtUsd } from '@/lib/utils';
 
 /** Cost-weighted donut for a categorical dimension (e.g. model). */
-export function Donut({ by, days, title, subtitle }: { by: BreakdownDim; days: number; title: string; subtitle?: string }) {
-  const q = useQuery({ queryKey: ['breakdown', by, days], queryFn: () => fetchBreakdown(by, days) });
+export function Donut({ by, days, title, subtitle, user }: { by: BreakdownDim; days: number; title: string; subtitle?: string; user?: string }) {
+  const q = useQuery({ queryKey: ['breakdown', by, days, user], queryFn: () => fetchBreakdown(by, days, user) });
   const items = (q.data ?? []).filter((i) => (i.costUsd ?? 0) > 0).slice(0, 8);
   const colors = tealSpread(Math.max(items.length, 1));
   const total = items.reduce((s, i) => s + (i.costUsd ?? 0), 0);

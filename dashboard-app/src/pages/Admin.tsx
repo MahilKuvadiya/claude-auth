@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, X } from 'lucide-react';
+import type { ColumnDef } from '@tanstack/react-table';
 import { PageHeader } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
+import { DataTable } from '@/components/ui/data-table';
 import { Select } from '@/components/ui/select';
+import type { AdminUser } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -36,28 +38,22 @@ function UsersCard() {
     mutationFn: ({ email, role }: { email: string; role: string }) => setUserRole(email, role),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin-users'] }),
   });
+  const columns: ColumnDef<AdminUser, unknown>[] = [
+    { header: 'Email', accessorKey: 'email' },
+    { header: 'Name', accessorKey: 'name', cell: ({ row }) => <span className="text-muted-foreground">{row.original.name ?? '—'}</span> },
+    { header: 'Role', accessorKey: 'role', cell: ({ row }) => <Badge tone={row.original.role === 'admin' ? 'accent' : row.original.role === 'pod_lead' ? 'success' : 'neutral'}>{row.original.role}</Badge> },
+    {
+      header: 'Change role', id: 'change', enableSorting: false,
+      cell: ({ row }) => <Select size="sm" value={row.original.role} options={ROLE_OPTS} onValueChange={(role) => setRole.mutate({ email: row.original.email, role })} className="w-36" />,
+    },
+  ];
   return (
     <Card>
-      <CardHeader><CardTitle>Users & roles</CardTitle></CardHeader>
+      <CardHeader><CardTitle>Users &amp; roles</CardTitle></CardHeader>
       <CardContent className="px-0 pb-2">
         {q.error ? <div className="px-5 pb-4"><ErrorState error={(q.error as Error).message} retry={q.refetch} /></div>
           : q.isLoading ? <div className="px-5 pb-4"><Skeleton h={200} /></div>
-            : (
-              <Table>
-                <THead><TR><TH>Email</TH><TH>Name</TH><TH>Role</TH><TH className="w-40">Change role</TH></TR></THead>
-                <TBody>
-                  {(q.data ?? []).map((u) => (
-                    <TR key={u.email}>
-                      <TD>{u.email}</TD>
-                      <TD className="text-muted-foreground">{u.name ?? '—'}</TD>
-                      <TD><Badge tone={u.role === 'admin' ? 'accent' : u.role === 'pod_lead' ? 'success' : 'neutral'}>{u.role}</Badge></TD>
-                      <TD><Select size="sm" value={u.role} options={ROLE_OPTS} onValueChange={(role) => setRole.mutate({ email: u.email, role })} className="w-36" /></TD>
-                    </TR>
-                  ))}
-                  {(q.data ?? []).length === 0 && <TR><TD colSpan={4} className="py-6 text-center text-muted-foreground">No users yet.</TD></TR>}
-                </TBody>
-              </Table>
-            )}
+            : <DataTable columns={columns} data={q.data ?? []} pageSize={15} empty="No users yet." initialSort={[{ id: 'email', desc: false }]} />}
       </CardContent>
     </Card>
   );

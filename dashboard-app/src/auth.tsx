@@ -1,28 +1,22 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import {
-  onIdTokenChanged, signInWithEmailAndPassword, sendPasswordResetEmail, signOut, User,
+  onIdTokenChanged, GoogleAuthProvider, signInWithPopup, signOut, User,
 } from 'firebase/auth';
 import { auth, firebaseError } from './firebase';
 import { fetchMe } from './api';
 import { E2E, e2eEmail, e2eRole } from './lib/e2e';
+
+const ALLOWED_DOMAIN = (import.meta.env.VITE_ALLOWED_DOMAIN as string) || 'devxlabs.ai';
 
 interface AuthState {
   user: User | null;
   role: string | null;
   loading: boolean;
   error: string | null;
-  signIn: (email: string, password: string) => Promise<void>;
-  resetPassword: (email: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
 }
 const Ctx = createContext<AuthState | null>(null);
-
-function friendly(code: string) {
-  if (code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found'))
-    return 'Incorrect email or password.';
-  if (code.includes('too-many-requests')) return 'Too many attempts — try again shortly.';
-  return 'Sign-in failed. Please try again.';
-}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -31,7 +25,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // E2E: skip Firebase, run as a fake user whose role comes from ?e2e=<role>.
     if (E2E) {
       setUser({ email: e2eEmail(), displayName: e2eRole() } as unknown as User);
       setRole(e2eRole());
@@ -52,18 +45,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const signIn = async (email: string, password: string) => {
+  const signInWithGoogle = async () => {
     setError(null);
-    try { await signInWithEmailAndPassword(auth, email.trim(), password); }
-    catch (e) { setError(friendly((e as { code?: string }).code || '')); throw e; }
-  };
-  const resetPassword = async (email: string) => {
-    setError(null);
-    await sendPasswordResetEmail(auth, email.trim());
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ hd: ALLOWED_DOMAIN, prompt: 'select_account' });
+    try {
+      const res = await signInWithPopup(auth, provider);
+      const email = res.user.email || '';
+      if (ALLOWED_DOMAIN && !email.toLowerCase().endsWith(`@${ALLOWED_DOMAIN}`)) {
+        await signOut(auth);
+        setError(`Use your @${ALLOWED_DOMAIN} account.`);
+      }
+    } catch (e) {
+      const code = (e as { code?: string }).code || '';
+      if (!code.includes('popup-closed') && !code.includes('cancelled')) setError('Sign-in failed. Please try again.');
+    }
   };
   const logout = () => signOut(auth);
 
-  return <Ctx.Provider value={{ user, role, loading, error, signIn, resetPassword, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, role, loading, error, signInWithGoogle, logout }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => {

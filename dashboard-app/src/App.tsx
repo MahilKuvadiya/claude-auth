@@ -5,6 +5,7 @@ import { AppShell } from './components/layout/AppShell';
 import { SignIn } from './pages/SignIn';
 import { Overview } from './pages/Overview';
 import { Leaderboard } from './pages/Leaderboard';
+import { UserAnalytics } from './pages/UserAnalytics';
 import { Sessions } from './pages/Sessions';
 import { SessionThread } from './pages/SessionThread';
 import { Pools } from './pages/Pools';
@@ -36,6 +37,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Overview />} />
         {elevated && <Route path="/team" element={<Leaderboard />} />}
+        {elevated && <Route path="/users/:email" element={<UserAnalytics />} />}
         {admin && <Route path="/sessions" element={<Sessions />} />}
         {admin && <Route path="/sessions/:id" element={<SessionThread />} />}
         {elevated && <Route path="/pools" element={<Pools />} />}

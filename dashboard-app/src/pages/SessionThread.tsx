@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
-import { AXIS_TICK, GRID_STROKE, REPORT_COLORS, ReportTooltip } from '@/lib/chart-theme';
+import { AXIS_TICK, GRID_STROKE, REPORT_COLORS, TEAL_SCALE, ReportTooltip } from '@/lib/chart-theme';
 import { fetchSessionThread } from '@/api';
 import { fmtNum, fmtUsd, fmtDate, fmtDuration, shortProject } from '@/lib/utils';
 import type { SessionMessage } from '@/types';
@@ -33,9 +33,16 @@ export function SessionThread() {
   const tokens = s ? s.inputTokens + s.outputTokens + s.cacheReadTokens + s.cacheCreateTokens : 0;
   const tools = new Set<string>();
   msgs.forEach((m) => m.toolNames.forEach((t) => tools.add(t)));
-  // cumulative output tokens across the thread (in-session token flow)
+  // In-session token flow over TIME: cumulative + per-message deltas, x = elapsed minutes
+  // from the session start (falls back to message index when timestamps are missing).
+  const t0 = s?.startedAt ? new Date(s.startedAt).getTime() : (msgs[0]?.ts ? new Date(msgs[0].ts).getTime() : 0);
   let cum = 0;
-  const flow = msgs.map((m, i) => { cum += m.outputTokens + m.inputTokens; return { i: i + 1, tokens: cum }; });
+  const flow = msgs.map((m, i) => {
+    const delta = m.inputTokens + m.outputTokens + m.cacheReadTokens + m.cacheCreateTokens;
+    cum += delta;
+    const mins = m.ts && t0 ? Math.max(0, Math.round((new Date(m.ts).getTime() - t0) / 60000)) : i;
+    return { t: mins, cumulative: cum, delta };
+  });
 
   return (
     <>
@@ -69,15 +76,16 @@ export function SessionThread() {
 
           {flow.length > 2 && (
             <Card className="mb-4">
-              <CardHeader><CardTitle>Token flow</CardTitle></CardHeader>
+              <CardHeader><CardTitle>Token flow over time</CardTitle></CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={160}>
+                <ResponsiveContainer width="100%" height={200}>
                   <AreaChart data={flow} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid vertical={false} stroke={GRID_STROKE} strokeOpacity={0.6} />
-                    <XAxis dataKey="i" tickLine={false} axisLine={false} tick={AXIS_TICK} />
-                    <YAxis tickFormatter={(v: number) => fmtNum(v)} tickLine={false} axisLine={false} tick={AXIS_TICK} width={48} />
-                    <Tooltip content={<ReportTooltip valueFormatter={fmtNum} unit="tok" />} />
-                    <Area type="monotone" dataKey="tokens" name="Cumulative" stroke={REPORT_COLORS.deep} strokeWidth={2} fill={REPORT_COLORS.deep} fillOpacity={0.1} dot={false} isAnimationActive={false} />
+                    <XAxis dataKey="t" type="number" tickFormatter={(v: number) => `${v}m`} tickLine={false} axisLine={false} tick={AXIS_TICK} />
+                    <YAxis tickFormatter={(v: number) => fmtNum(v)} tickLine={false} axisLine={false} tick={AXIS_TICK} width={52} />
+                    <Tooltip labelFormatter={(v) => `${v} min in`} content={<ReportTooltip valueFormatter={fmtNum} unit="tok" />} />
+                    <Area type="monotone" dataKey="delta" name="Per message" stroke={TEAL_SCALE[2]} strokeWidth={0} fill={TEAL_SCALE[2]} fillOpacity={0.25} isAnimationActive={false} />
+                    <Area type="monotone" dataKey="cumulative" name="Cumulative" stroke={REPORT_COLORS.deep} strokeWidth={2} fill={REPORT_COLORS.deep} fillOpacity={0.08} dot={false} isAnimationActive={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               </CardContent>

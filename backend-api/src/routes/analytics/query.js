@@ -15,6 +15,7 @@ const dateQ = {
   properties: {
     from: { type: 'string' }, to: { type: 'string' },
     days: { type: 'integer', minimum: 1, maximum: 365 },
+    user: { type: 'string' }, // optional: scope to a single user (must be in the allowed set)
   },
 };
 
@@ -27,14 +28,26 @@ function scope(allowed) {
   };
 }
 
+// Like scope(), but narrows to one `user` when provided — 403 if the caller isn't
+// permitted to see that user (drives the per-user analytics drill-down).
+async function effectiveScope(actor, user) {
+  const allowed = await allowedEmails(actor);
+  if (user) {
+    const u = String(user).toLowerCase();
+    if (allowed !== null && !allowed.includes(u))
+      throw Object.assign(new Error('not permitted to view this user'), { statusCode: 403, code: 'forbidden' });
+    return { where: { userEmail: u }, sql: Prisma.sql`s."userEmail" = ${u}` };
+  }
+  return scope(allowed);
+}
+
 const TOKEN_SUM = { inputTokens: true, outputTokens: true, cacheReadTokens: true, cacheCreateTokens: true, costUsd: true, msgCount: true };
 
 export default async function analyticsQueryRoutes(app) {
   // GET /v1/analytics/summary — headline totals + derived stats across the allowed set.
   app.get('/v1/analytics/summary', { preHandler: authUser, schema: { querystring: dateQ } }, async (req) => {
-    const allowed = await allowedEmails(req.actor);
     const { from, to } = window(req.query);
-    const s = scope(allowed);
+    const s = await effectiveScope(req.actor, req.query.user);
     const where = { startedAt: { gte: from, lt: to }, ...s.where };
     const [agg, sessions, extra] = await Promise.all([
       prisma.session.aggregate({ where, _sum: TOKEN_SUM }),
@@ -94,8 +107,8 @@ export default async function analyticsQueryRoutes(app) {
 
   // GET /v1/analytics/activity — per-day series (all token buckets + messages + cost).
   app.get('/v1/analytics/activity', { preHandler: authUser, schema: { querystring: dateQ } }, async (req) => {
-    const allowed = await allowedEmails(req.actor);
     const { from, to } = window(req.query);
+    const s = await effectiveScope(req.actor, req.query.user);
     const rows = await prisma.$queryRaw`
       SELECT to_char(date_trunc('day', s."startedAt"), 'YYYY-MM-DD') AS date,
              count(*)::int AS sessions,
@@ -106,7 +119,7 @@ export default async function analyticsQueryRoutes(app) {
              COALESCE(sum(s."cacheCreateTokens"), 0)::bigint AS "cacheCreateTokens",
              COALESCE(sum(s."costUsd"), 0)::float AS "costUsd"
       FROM "Session" s
-      WHERE s."startedAt" IS NOT NULL AND s."startedAt" >= ${from} AND s."startedAt" < ${to} AND ${scope(allowed).sql}
+      WHERE s."startedAt" IS NOT NULL AND s."startedAt" >= ${from} AND s."startedAt" < ${to} AND ${s.sql}
       GROUP BY 1 ORDER BY 1`;
     return serializeBigInts({ scope: req.actor.role, activity: rows });
   });
@@ -122,10 +135,9 @@ export default async function analyticsQueryRoutes(app) {
       },
     },
   }, async (req) => {
-    const allowed = await allowedEmails(req.actor);
     const { from, to } = window(req.query);
     const by = req.query.by;
-    const s = scope(allowed);
+    const s = await effectiveScope(req.actor, req.query.user);
     let items;
 
     if (by === 'model' || by === 'project') {

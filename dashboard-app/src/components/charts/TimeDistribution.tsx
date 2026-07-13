@@ -10,9 +10,9 @@ import { fmtNum } from '@/lib/utils';
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /** Session activity distributed across hour-of-day or weekday. */
-export function TimeDistribution({ days }: { days: number }) {
+export function TimeDistribution({ days, user }: { days: number; user?: string }) {
   const [mode, setMode] = useState<'hour' | 'weekday'>('hour');
-  const q = useQuery({ queryKey: ['breakdown', mode, days], queryFn: () => fetchBreakdown(mode, days) });
+  const q = useQuery({ queryKey: ['breakdown', mode, days, user], queryFn: () => fetchBreakdown(mode, days, user) });
 
   const base = mode === 'hour'
     ? Array.from({ length: 24 }, (_, h) => ({ key: String(h), label: `${h}:00`, sessions: 0 }))

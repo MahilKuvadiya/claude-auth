@@ -6,9 +6,9 @@ import { AXIS_TICK, GRID_STROKE, REPORT_COLORS, CategoryTick, ChartState, Report
 import { fmtNum, fmtUsd, shortProject } from '@/lib/utils';
 
 /** Horizontal top-N bar chart for a dimension. valueKey picks cost vs a raw count. */
-export function BarBreakdown({ by, days, title, subtitle, valueKey = 'costUsd', unit }:
-  { by: BreakdownDim; days: number; title: string; subtitle?: string; valueKey?: 'costUsd' | 'count' | 'tokens'; unit?: string }) {
-  const q = useQuery({ queryKey: ['breakdown', by, days], queryFn: () => fetchBreakdown(by, days) });
+export function BarBreakdown({ by, days, title, subtitle, valueKey = 'costUsd', unit, user }:
+  { by: BreakdownDim; days: number; title: string; subtitle?: string; valueKey?: 'costUsd' | 'count' | 'tokens'; unit?: string; user?: string }) {
+  const q = useQuery({ queryKey: ['breakdown', by, days, user], queryFn: () => fetchBreakdown(by, days, user) });
   const rows = (q.data ?? [])
     .map((i) => ({ key: by === 'project' ? shortProject(i.key) : i.key, value: Number((i as Record<string, unknown>)[valueKey] ?? 0) }))
     .filter((r) => r.value > 0)

@@ -25,8 +25,8 @@ const { prisma } = await import('../../src/lib/clients.js');
 const tok = (email) => Buffer.from(JSON.stringify({ uid: email, email }), 'utf8').toString('base64');
 const H = (email) => ({ authorization: `Bearer ${tok(email)}` });
 const ADMIN = 'boss@devxlabs.ai';
-const LEAD = 'lead@devxlabs.ai';
-const MEMBER = 'ic@devxlabs.ai';
+const LEAD = 'rbac-lead@devxlabs.ai';
+const MEMBER = 'rbac-ic@devxlabs.ai';
 
 let app;
 before(async () => {
