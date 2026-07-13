@@ -1,10 +1,13 @@
 name: api
 
-# Build/test the unified REST API, and deploy it to Cloud Run on merge to main.
-# Separate from the Python CLI CI. Keyless auth via the existing WIF pool.
+# Branch → environment:
+#   push to `uat`  → deploy claudex-api-uat  + migrate claudex_uat
+#   push to `main` → deploy claudex-api-prod + migrate claudex_prod
+# PRs run the full test suite (unit + contract + Postgres integration) but never deploy.
+# Keyless auth via the shared WIF pool; the deployer SA acts-as the per-env runtime SA.
 on:
   push:
-    branches: [main]
+    branches: [uat, main]
     paths: ["backend-api/**", ".github/workflows/deploy-api.yml"]
   pull_request:
     paths: ["backend-api/**", ".github/workflows/deploy-api.yml"]
@@ -13,50 +16,77 @@ defaults:
   run:
     working-directory: backend-api
 
+env:
+  PROJECT: yash-test-495112
+  REGION: asia-south1
+  CLOUDSQL: yash-test-495112:asia-south1:claudex-db
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: claudex_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/claudex_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22", cache: "npm", cache-dependency-path: backend-api/package-lock.json }
       - run: npm ci
       - run: npm run lint
-      - run: npm test          # unit + contract (no external deps)
-
-      # Firestore-emulator integration (Secret Manager + Anthropic are module-mocked)
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: "21" }
-      - run: npm i -g firebase-tools
-      - run: npm run test:emulator
-        env:
-          GCP_PROJECT: yash-test-495112
+      - run: npm test                       # unit + contract (no external deps)
+      - run: npx prisma migrate deploy       # apply schema to the throwaway test DB
+      - run: npm run test:integration        # pool + RBAC + analytics against real Postgres
 
   deploy:
     needs: test
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write          # keyless Workload Identity Federation
+      id-token: write                        # keyless Workload Identity Federation
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve environment from branch
+        id: env
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then echo "name=prod" >> "$GITHUB_OUTPUT";
+          else echo "name=uat" >> "$GITHUB_OUTPUT"; fi
       - id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: projects/632653045864/locations/global/workloadIdentityPools/github-pool/providers/github-provider
-          # NOTE: provision this deployer SA + roles (run.admin, iam.serviceAccountUser,
-          # cloudbuild.builds.editor, artifactregistry.writer) and grant it WIF impersonation
-          # before the first deploy. See backend-api/DEPLOY.md.
           service_account: claudex-deployer@yash-test-495112.iam.gserviceaccount.com
       - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run DB migrations (Cloud SQL proxy)
+        run: |
+          ENV=${{ steps.env.outputs.name }}
+          curl -sSL -o /tmp/proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
+          chmod +x /tmp/proxy
+          /tmp/proxy --port 5432 "$CLOUDSQL" & PROXY_PID=$!
+          sleep 6
+          # Reuse the runtime DATABASE_URL secret, but point it at the local proxy.
+          URL=$(gcloud secrets versions access latest --secret="claudex-dburl-$ENV" --project "$PROJECT" \
+                | sed -E 's#@localhost/#@127.0.0.1:5432/#; s#\?host=[^&]*&?##; s#&?sslmode=disable##')
+          DATABASE_URL="$URL" npx prisma migrate deploy
+          kill $PROXY_PID || true
+
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy claudex-api \
+          ENV=${{ steps.env.outputs.name }}
+          gcloud run deploy "claudex-api-$ENV" \
             --source . \
-            --project yash-test-495112 \
-            --region asia-south1 \
+            --project "$PROJECT" \
+            --region "$REGION" \
             --allow-unauthenticated \
-            --service-account claudex-api@yash-test-495112.iam.gserviceaccount.com \
-            --set-env-vars "GCP_PROJECT=yash-test-495112,FIRESTORE_DB=claude-pool,KMS_LOCATION=asia-south1,USAGE_TOPIC=claude-pool-usage,DASHBOARD_ORIGIN=${{ vars.DASHBOARD_ORIGIN }}" \
+            --service-account "claudex-api-$ENV@$PROJECT.iam.gserviceaccount.com" \
+            --add-cloudsql-instances "$CLOUDSQL" \
+            --set-secrets "DATABASE_URL=claudex-dburl-$ENV:latest" \
+            --set-env-vars "GCP_PROJECT=$PROJECT,KMS_LOCATION=$REGION,USAGE_TOPIC=claude-pool-usage,JWT_SECRET=projects/632653045864/secrets/claudex-jwt-$ENV/versions/latest,DASHBOARD_ORIGIN=${{ vars.DASHBOARD_ORIGIN }},ADMIN_EMAILS=${{ vars.ADMIN_EMAILS }},ENROLL_DOMAINS=devxlabs.ai,ENROLL_KEY=${{ secrets.ENROLL_KEY }}" \
             --min-instances 0 --max-instances 4 --cpu 1 --memory 512Mi --timeout 60
