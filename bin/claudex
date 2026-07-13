@@ -575,7 +575,7 @@ def write_live_credential(blob, acct):
 
 def read_claude_json():
     try:
-        with open(CLAUDE_JSON) as f:
+        with open(CLAUDE_JSON, encoding="utf-8") as f:  # JSON is UTF-8; never rely on locale
             return json.load(f)
     except FileNotFoundError:
         return {}
@@ -4638,7 +4638,7 @@ def build_parser():
 def _analytics_log(msg):
     try:
         os.makedirs(STORE_DIR, exist_ok=True)
-        with open(ANALYTICS_LOG, "a") as f:
+        with open(ANALYTICS_LOG, "a", encoding="utf-8") as f:
             f.write("%s  %s\n" % (datetime.now(timezone.utc).isoformat(timespec="seconds"), msg))
     except Exception:
         pass
@@ -4656,7 +4656,7 @@ def _analytics_post(path, payload, token=None, key=None, timeout=30):
 
 def _analytics_load_state():
     try:
-        with open(ANALYTICS_STATE) as f:
+        with open(ANALYTICS_STATE, encoding="utf-8") as f:
             st = json.load(f)
         st.setdefault("files", {})
         return st
@@ -4667,7 +4667,7 @@ def _analytics_save_state(st):
     try:
         os.makedirs(STORE_DIR, exist_ok=True)
         tmp = ANALYTICS_STATE + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(st, f)
         os.replace(tmp, ANALYTICS_STATE)
     except Exception:
@@ -4863,6 +4863,10 @@ def _analytics_plist_xml(exe):
         '  <key>ProcessType</key><string>Background</string>\n'
         '  <key>Nice</key><integer>10</integer>\n'
         '  <key>LowPriorityIO</key><true/>\n'
+        # launchd starts us with no locale; force UTF-8 so JSON reads never hit the ascii codec.
+        '  <key>EnvironmentVariables</key><dict>'
+        '<key>PYTHONUTF8</key><string>1</string>'
+        '<key>LANG</key><string>en_US.UTF-8</string></dict>\n'
         '  <key>StandardOutPath</key><string>%s</string>\n'
         '  <key>StandardErrorPath</key><string>%s</string>\n'
         '</dict></plist>\n'
@@ -4870,24 +4874,33 @@ def _analytics_plist_xml(exe):
     )
 
 def ensure_analytics_agent():
-    """Idempotently install the launchd agent. No-op if the kill-switch is set, if not
-    the compiled binary (avoids dev runs registering an agent), or if already present.
-    Fast path is a single stat; wrapped so it can never break the CLI."""
+    """Idempotently install/repair the launchd agent. No-op if the kill-switch is set or
+    this isn't the compiled binary (avoids dev runs registering an agent). Rewrites the
+    plist when its content is stale (e.g. an older binary's version) so fixes self-heal on
+    update. Wrapped so it can never break the CLI."""
     if _analytics_off() or not _is_compiled():
         return
     try:
         exe = _self_path()
-        if os.path.exists(ANALYTICS_PLIST):
-            return
         if not exe or not os.path.exists(exe):
             return
+        want = _analytics_plist_xml(exe)
+        try:
+            with open(ANALYTICS_PLIST, encoding="utf-8") as f:
+                if f.read() == want:
+                    return                      # already current — fast path
+        except OSError:
+            pass                                # missing → (re)install below
         os.makedirs(os.path.dirname(ANALYTICS_PLIST), exist_ok=True)
         os.makedirs(STORE_DIR, exist_ok=True)
         tmp = ANALYTICS_PLIST + ".tmp"
-        with open(tmp, "w") as f:
-            f.write(_analytics_plist_xml(exe))
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(want)
         os.replace(tmp, ANALYTICS_PLIST)
         uid = os.getuid()
+        # bootout an old definition first (ignore errors), then (re)bootstrap.
+        subprocess.run(["launchctl", "bootout", "gui/%d/%s" % (uid, ANALYTICS_LABEL)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
         subprocess.run(["launchctl", "bootstrap", "gui/%d" % uid, ANALYTICS_PLIST],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     except Exception:
