@@ -1,0 +1,9 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars.local
+crash.log
+crash.*.log
+.terraform.tfstate.lock.info
+# keep: *.tf, .terraform.lock.hcl (provider pins)
