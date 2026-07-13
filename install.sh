@@ -38,6 +38,15 @@ if [[ -z "${CLAUDEX_ANALYTICS_OFF:-}" ]]; then
   echo "✓ analytics agent enabled (background, read-only; set CLAUDEX_ANALYTICS_OFF=1 to disable)"
 fi
 
+# Enable the always-on proxy (passthrough by default). Skips on headless/opt-out.
+if [[ -z "${CLAUDEX_PROXY_OFF:-}" ]]; then
+  if "$DEST" proxy on >/dev/null 2>&1; then
+    echo "✓ always-on proxy enabled (passthrough; 'claudex pool start' to pool · 'claudex proxy off' to disable)"
+  else
+    echo "• always-on proxy not enabled here (headless or unavailable) — 'claudex proxy on' to try later"
+  fi
+fi
+
 # Warn if ~/.local/bin isn't on PATH
 case ":$PATH:" in
   *":$DEST_DIR:"*)

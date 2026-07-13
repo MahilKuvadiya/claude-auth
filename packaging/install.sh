@@ -112,4 +112,16 @@ fi
 
 echo
 "$DEST" --version || true
+
+# ── enable the always-on proxy (routes Claude Code through a local, self-healing
+# proxy in transparent passthrough; `claudex pool start` turns on token-swap). Skips
+# cleanly on a headless/SSH box or when opted out. CLAUDEX_PROXY_OFF=1 disables it. ─
+if [ -z "${CLAUDEX_PROXY_OFF:-}" ]; then
+  if "$DEST" proxy on >/dev/null 2>&1; then
+    echo "✓ always-on proxy enabled (passthrough; 'claudex pool start' to pool · 'claudex proxy off' to disable)"
+  else
+    echo "• always-on proxy not enabled here (headless or unavailable) — 'claudex proxy on' to try later"
+  fi
+fi
+
 echo "Done. Try:  claudex --help"

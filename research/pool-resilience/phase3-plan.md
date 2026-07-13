@@ -118,6 +118,14 @@ Wiring rules (`_wire_base_url`/`_unwire_base_url`, extended):
 
 ---
 
+## 5b. Uninstall / manual-removal hazard (documented residual)
+
+**Scenario:** proxy enabled (wired + agent), user removes claudex, reboots.
+- **Via `uninstall.sh` (blessed path):** it runs `proxy off` first → unwire (restore prior) + bootout + disable + remove plist/state, *then* deletes the binary. Reboot is clean; Claude Code goes direct. ✅
+- **Via a manual `rm ~/.local/bin/claudex` (bypasses the uninstaller):** BREAKS. `settings.json` stays wired to `127.0.0.1:<port>`; the launchd plist survives and `RunAtLoad` tries to exec the now-missing binary (fails; `KeepAlive` can't relaunch a deleted file) → dead wired port → every Claude Code request refused, with **no claudex left to run `proxy off`**. This is inherent to any wire-at-install model — no process-based design can self-recover once both daemon and binary are gone.
+- **Mitigations shipped:** (1) correct `uninstall.sh`; (2) `uninstall.sh` prints hand-recovery steps if the binary is already gone; (3) `doctor` flags "wired to a proxy that isn't running" with the exact fix while a binary still exists; (4) documentation that removal must go through `uninstall.sh` / `claudex proxy off`.
+- **Manual recovery (if stuck):** delete `env.ANTHROPIC_BASE_URL` from `~/.claude/settings.json` and remove `~/Library/LaunchAgents/ai.devxlabs.claudex.proxy.plist`.
+
 ## 6. Testing strategy (unchanged discipline: nothing touches the live setup)
 
 - **Unit (module import + temp HOME/STORE):** wire/unwire branch matrix (none / corp-gateway chain / our-own-port idempotent / other-loopback); `_pick_proxy_port` with a pre-bound socket; `enrolled` gating of `main()` self-heal (mock `ensure_proxy_agent`); migration detection with a fake legacy `pool.pid`/state.
@@ -132,9 +140,9 @@ Wiring rules (`_wire_base_url`/`_unwire_base_url`, extended):
 - **3a — ✅ DONE** — `_upstream_target`/`_parse_upstream` + `_UPSTREAM_OVERRIDE` (chain-through plumbing); `_proxy_serve` sets it from `proxy.json.upstream`. Upstream still defaults to Anthropic; env test-seam unchanged.
 - **3b — ✅ DONE** — `_pick_proxy_port` (auto-avoids a busy port); `_proxy_wire`/`_proxy_unwire` (capture-once `wiredBaseUrlPrev`, chain-through a gateway, idempotent for our own port, never touch a foreign value) + `_proxy_state_delete`.
 - **3c — ✅ DONE** — `proxy on`/`off`/`install`/`uninstall` commands; `enrolled` marker; `_proxy_health_is_ours` (identity-checked, wire only after our daemon is healthy — no dead/foreign port); `main()` self-heal gated strictly on `enrolled`.
-- **3d — NEXT (needs go-ahead)** — installer + uninstaller hooks + `CLAUDEX_PROXY_OFF` + headless guard. *(first step that auto-enrolls on install.)*
-- **3e** — `pool start`/`stop` cutover to flag-only + `pool status`/`doctor` messaging + migration.
-- **3f** — manual integration pass in a throwaway account/VM; then flip the installer default on.
+- **3d — ✅ DONE** — `packaging/install.sh` + `install.sh` run `claudex proxy on` at install (skip on `CLAUDEX_PROXY_OFF=1`); `_has_gui_session` headless guard (skip agent+wiring on SSH/no-GUI, don't wire a proxy we can't keep alive); `uninstall.sh` runs `proxy off` **before** deleting the binary (+ a hand-recovery note if the binary is already gone).
+- **3e — ✅ DONE** — enrolled `pool start` → `_pool_start_supervised` (mode=swap only; no spawn, no settings edit); enrolled `pool stop` → mode=passthrough (proxy stays in path); non-enrolled keeps the legacy spawn/wire path unchanged; `_proxy_on` migrates (retires) a legacy running daemon; `doctor` gains an always-on-proxy check incl. the "wired but daemon down" recovery case.
+- **3f — MANUAL (pre-release gate, §9)** — human integration pass in a throwaway account/VM before flipping the installer default on for real users.
 
 3a–3c landed safe and inert (like Phases 0–2): the agent + wiring activate only via the explicit `proxy on` command; `main()` never enrolls anyone. Tests: `tests/test_proxy_wiring.py` (14) + an end-to-end `proxy on`→`pool start`→`proxy off` cycle (stubbed launchd/health) proving health-gated wiring, gateway chain+restore, enroll toggle, and no dead-port wiring. Full suite 80/80. Verified on the dev machine: no real `proxy.json`, no agent, `settings.json` untouched; port-pick correctly chose 8849 while the live pool held 8848. **3d is the first step that makes install auto-enroll — checkpoint with the user before landing.**
 
@@ -146,5 +154,22 @@ Wiring rules (`_wire_base_url`/`_unwire_base_url`, extended):
 - **D2 — [RESOLVED] `proxy off` leaves the mode flag as-is** (routing is moot while unwired; the next `proxy on` resumes the prior mode).
 - **D3 — [RESOLVED] automatic migration:** on first new-binary run, detect a running old-style pool, transition it to the always-on agent (keeping the port served throughout so no session breaks), and carry `pool.json`→`proxy.json`.
 - **D4 — [verify during 3b]** the always-on proxy's port-pick must not collide with the `session`/keep-warm loopback servers (they bind ephemeral/other ports — confirm in code).
+
+## 9. Phase 3f — manual integration checklist (pre-release gate)
+
+Run on a **throwaway macOS account or VM with a disposable Claude login** — never a
+machine you rely on. This covers what isolated unit tests can't (real launchd, real
+reboot, real `claude`). Only after this passes should the installer default ship on.
+
+1. **Fresh install** — `curl|bash` (or `install.sh`). Verify: agent registered (`launchctl print gui/$UID/ai.devxlabs.claudex.proxy`), `settings.json` wired to the picked port, `proxy.json` `enrolled=true mode=passthrough`, and a real `claude -p "hi"` works (passthrough, own token).
+2. **Pool** — `claudex pool start` → `claude -p` still works and `proxy status` shows `mode swap`; `pool stop` → `mode passthrough`, session still works. No restart at any point.
+3. **Crash survival** — `kill -9` the daemon pid → within a few seconds it's back (new pid); `claude` uninterrupted on the next turn.
+4. **Reboot** — restart the machine; after login, daemon is up (RunAtLoad) and `claude` works with no manual step.
+5. **Corp-gateway chain** — set `ANTHROPIC_BASE_URL=https://<gateway>` before install; verify traffic still reaches the gateway and `proxy off` restores it exactly.
+6. **Port conflict** — occupy 8848 first; verify install picks another port and wires it.
+7. **Headless** — install over SSH with no GUI session; verify it skips wiring and warns, and `claude` still works (direct).
+8. **`proxy off`** — verify routing reverts (direct to Anthropic), agent gone, reversible with `proxy on`.
+9. **Uninstall then reboot** — `uninstall.sh`; reboot; verify NO dead-port errors (clean).
+10. **Manual-rm hazard** — `rm` the binary WITHOUT uninstall, reboot; confirm the documented breakage + that the recovery steps fix it. (Validates the §5b warning is accurate.)
 
 **Cutover consequence of D1:** since we wire at install in passthrough, `pool start`/`pool stop` become **pure mode-flag flips** and must NEVER touch `settings.json` (wiring is owned by install / `proxy on` / `proxy off`). `pool join` also sets `mode=swap` (joining a pool = intent to use it).

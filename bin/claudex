@@ -3191,6 +3191,16 @@ def _proxy_health_is_ours(port, timeout=6.0):
         time.sleep(0.15)
     return False
 
+def _has_gui_session():
+    """True if there's a launchd GUI (Aqua) domain to host the agent. False on a
+    headless/SSH box, where we must NOT wire a proxy we can't keep alive."""
+    try:
+        r = subprocess.run(["launchctl", "print", "gui/%d" % os.getuid()],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
+
 def _proxy_on():
     """Install/repair the always-on agent AND wire routing — the routing-enable path.
     Order matters: ensure the agent, confirm OUR daemon is healthy, THEN wire (never
@@ -3199,6 +3209,16 @@ def _proxy_on():
         warn("CLAUDEX_PROXY_OFF is set — refusing to enable the proxy"); return
     if not _is_compiled():
         die("`proxy on` needs the installed binary (the launchd agent won't run from the raw script)")
+    if not _has_gui_session():
+        warn("no GUI login session (headless/SSH) — skipping the always-on proxy "
+             + dim("(nothing wired; claudex commands still work)"))
+        return
+    # Migration (D3): retire any legacy `pool serve` daemon so it can't double-serve
+    # or hold the port; the always-on agent takes over.
+    legacy = _pool_pid()
+    if legacy:
+        _pool_hard_kill(legacy)
+        _pool_log(f"proxy: migrated — retired legacy pool daemon pid {legacy}")
     port = _pick_proxy_port(_proxy_state_read().get("port") or DEFAULT_POOL_PORT)
     _proxy_state_write(port=port)
     if "mode" not in _proxy_state_read():
@@ -3273,10 +3293,36 @@ def cmd_proxy(args):
     hint("agent label " + clay(PROXY_LABEL))
     info()
 
+def _pool_start_supervised(args):
+    """Always-on model: `pool start` is just a mode flip to swap. No process spawn,
+    no settings edit — the always-on daemon reads the flag live."""
+    cfg = None if getattr(args, "local", False) else _remote_config()
+    if cfg:
+        try:
+            n = len(_store_from_config(cfg).load().get("members", {}))
+        except Exception as e:
+            die(f"couldn't reach the shared pool: {e}")
+        if n == 0:
+            die("the shared pool has no members yet — run " + clay("claudex pool join <link>"))
+    else:
+        n = len(load_index()["accounts"])
+        if n == 0:
+            die("no saved accounts — run " + clay("claudex login") + " or " + clay("add") + " first")
+    ensure_proxy_agent(_proxy_state_read().get("port") or DEFAULT_POOL_PORT)   # make sure the daemon is up
+    _proxy_set_mode("swap")
+    info()
+    ok("Pooling on " + dim("· token-swap enabled · always-on proxy"))
+    hint("running sessions pool on their next request " + dim("— no restart"))
+    hint("stop swapping with " + clay("claudex pool stop")
+         + dim(" (proxy stays in the path) · ") + clay("claudex proxy off") + dim(" to remove it entirely"))
+    info()
+
 def _pool_start(args):
-    # Also record the desired mode in the proxy flag so the always-on daemon (once
-    # wired at install, Phase 3) starts swapping. Best-effort: the legacy daemon
-    # below ignores proxy.json, so this is additive and never breaks the old flow.
+    # Always-on model (proxy enabled): pool start = flip the mode flag to swap.
+    if _proxy_state_read().get("enrolled"):
+        return _pool_start_supervised(args)
+    # Legacy model (proxy not enabled): spawn + wire as before. Keep the flag in
+    # sync so a later `proxy on` inherits the intent.
     try: _proxy_set_mode("swap")
     except Exception: pass
     # A joined shared pool is served by default; --local forces the Keychain pool.
@@ -3352,7 +3398,17 @@ def _pool_hard_kill(pid):
         pass
 
 def _pool_stop(args):
-    # Flip the proxy flag back to the transparent floor (additive; see _pool_start).
+    # Always-on model: pool stop = flip the mode flag back to the transparent floor.
+    # The proxy STAYS in the path (passthrough); routing is removed only by `proxy off`.
+    if _proxy_state_read().get("enrolled"):
+        _proxy_set_mode("passthrough")
+        info()
+        ok("Pooling off " + dim("· token-swap disabled · proxy stays in passthrough"))
+        hint("sessions keep working on their own token " + dim("— no restart"))
+        hint("remove the proxy entirely with " + clay("claudex proxy off"))
+        info()
+        return
+    # Legacy model: unwire + park/kill the spawned daemon (original behavior).
     try: _proxy_set_mode("passthrough")
     except Exception: pass
     pid = _pool_pid()
@@ -4315,7 +4371,20 @@ def cmd_doctor(args):
     ppid = _pool_pid()
     pwired = (_read_settings().get("env") or {}).get("ANTHROPIC_BASE_URL", "")
     pmine = pwired.startswith("http://127.0.0.1:")
-    if ppid and pmine:
+    pxst = _proxy_state_read()
+    if pxst.get("enrolled"):
+        # always-on model: the health of the wired daemon is what matters
+        prpid = _proxy_pid()
+        if prpid and pmine:
+            check("ok", "proxy", f"always-on (pid {prpid}) · mode {_proxy_mode()} · wired")
+        elif pmine and not prpid:
+            # wired to a port with no daemon — the dangerous 'binary/agent gone' case
+            check("warn", "proxy",
+                  "wired to a proxy that isn't running — run `claudex proxy on` to restore it, "
+                  "or `claudex proxy off` to go back to talking to Anthropic directly")
+        elif prpid and not pmine:
+            check("warn", "proxy", "running but not wired — `claudex proxy on`")
+    elif ppid and pmine:
         check("ok", "pool", f"running (pid {ppid}) and wired into settings.json")
     elif ppid and not pmine:
         check("warn", "pool", "running but not wired — `claudex pool start` to wire it")

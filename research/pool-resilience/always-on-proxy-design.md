@@ -294,4 +294,4 @@ Implement §6 rules; the shared/backend fail-loud vs auto-degrade setting.
 - **Group G (proxy emits hard errors) — contained** by §6 degradation + upstream-transparent retryable errors.
 - **Groups D/E/I/K/M — reduced** by the Phase-0 hardening + identity checks the always-in-path bar forces us to do.
 
-Residual, irreducible: the sub-second self-heal window after a `kill -9`, a genuinely-down Anthropic, and a user with no personal token to fall back to (all documented, none fatal).
+Residual, irreducible: the sub-second self-heal window after a `kill -9`, a genuinely-down Anthropic, and a user with no personal token to fall back to (all documented, none fatal). One more, specific to wire-at-install: **removing the binary by hand (bypassing `uninstall.sh`) strands the wiring** — see `phase3-plan.md` §5b for the hazard, the shipped mitigations (correct uninstaller, `doctor` detection, hand-recovery note), and the manual fix.
