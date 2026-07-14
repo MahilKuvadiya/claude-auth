@@ -17,7 +17,7 @@ VER := $(if $(filter prod,$(CHANNEL)),$(BASEVER),$(BASEVER).$(BUILD))
 all: check test lint
 
 ## check: syntax gate — the same validation the release build runs first
-check:then 
+check:
 	python3 -m py_compile $(BIN)
 
 ## build: compile the single-file source into a native binary via Nuitka (arm64)
