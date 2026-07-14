@@ -53,7 +53,7 @@ def _macos_ssl_context(*args, **kwargs):
 
 ssl._create_default_https_context = _macos_ssl_context
 
-__version__ = "2.2.1"  # x-release-please-version
+__version__ = "2.2.2"  # x-release-please-version
 
 API_USAGE = "https://api.anthropic.com/api/oauth/usage"
 API_PROFILE = "https://api.anthropic.com/api/oauth/profile"
@@ -3567,30 +3567,25 @@ def _pool_stop(args):
     info()
 
 def _pool_status(args):
-    pid = _pool_pid()
-    st = _pool_read_state()
+    # Pooling == the token-swap switch on the always-on proxy (proxy.json `mode`),
+    # which is exactly what `pool start` / `pool stop` flip. Read that switch only —
+    # the legacy spawned-daemon PID (pool.pid) is NOT consulted, because the always-on
+    # `pool start` never writes it.
+    swap_on = _proxy_mode() == "swap"
+    port = _proxy_state_read().get("port") or _pool_read_state().get("port", DEFAULT_POOL_PORT)
     info()
     info(IND + bold(clay("Pool")) + dim("   ·   shared multi-account proxy"))
     info()
-    if not pid:
+    if not swap_on:
         info(IND + dim("○") + " " + dim("not running"))
         hint("start with " + clay("claudex pool start"))
         info()
         return
-    if st.get("passthrough"):
-        info(IND + yellow("◐") + " stopped " +
-             dim(f"· passthrough shim active (pid {pid}) for running sessions · exits when idle"))
-        hint("sessions started under the pool keep working on their own account")
-        hint("start again with " + clay("claudex pool start") +
-             dim(" · or ") + clay("pool stop --now") + dim(" to kill the shim"))
-        info()
-        return
-    port = st.get("port", DEFAULT_POOL_PORT)
-    remote = st.get("remote")
+    remote = bool(_remote_config())
     src = "shared pool" if remote else "local accounts"
-    mode_note = "manual select" if remote else "mode " + str(st.get("mode", "?"))
+    mode_note = "manual select" if remote else "failover"
     info(IND + green("●") + " running   " +
-         dim(f"pid {pid} · 127.0.0.1:{port} · {mode_note} · {src}"))
+         dim(f"token-swap on · 127.0.0.1:{port} · {mode_note} · {src}"))
     if remote:
         cfg = _remote_config() or {}
         sel = cfg.get("selectedMemberId")
@@ -3615,12 +3610,6 @@ def _pool_status(args):
             state = green("ready") if cd == 0 else yellow(f"resting {cd}s")
             info(IND * 2 + ink(vpad(a["name"], w)) + "  " + state +
                  dim(f"   served {a['served']} · failovers {a['failover']}"))
-    wired = (_read_settings().get("env") or {}).get("ANTHROPIC_BASE_URL", "")
-    info()
-    if wired.startswith("http://127.0.0.1:"):
-        info(IND * 2 + green("✓") + dim(" wired into settings.json"))
-    else:
-        info(IND * 2 + yellow("!") + dim(" not wired — Claude Code won't use it (pool start --no-wire?)"))
     info()
 
 # ───────────────────── shared pool: create / join / leave / members ─────────
