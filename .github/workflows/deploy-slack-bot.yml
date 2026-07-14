@@ -54,5 +54,5 @@ jobs:
             --allow-unauthenticated \
             --service-account "$RUNTIME_SA" \
             --set-secrets "SLACK_BOT_TOKEN=claudex-slack-bot-token:latest,SLACK_SIGNING_SECRET=claudex-slack-signing:latest,CLAUDEX_BOT_TOKEN=claudex-bot-token:latest" \
-            --set-env-vars "API_URL=${{ vars.SLACK_BOT_API_URL || 'https://claudex-api-632653045864.asia-south1.run.app' }},DASHBOARD_URL=${{ vars.SLACK_BOT_DASHBOARD_URL || 'https://docs.devxlabs.ai' }}" \
+            --set-env-vars "API_URL=${{ vars.SLACK_BOT_API_URL || 'https://claudex-api-prod-tvjj3mwixq-el.a.run.app' }},DASHBOARD_URL=${{ vars.SLACK_BOT_DASHBOARD_URL || 'https://docs.devxlabs.ai' }}" \
             --min-instances 0 --max-instances 2 --cpu 1 --memory 256Mi --timeout 60

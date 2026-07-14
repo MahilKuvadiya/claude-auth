@@ -7,7 +7,7 @@ export const config = {
   slackSigningSecret: process.env.SLACK_SIGNING_SECRET || "",
 
   // backend-api base + the bot's service credential for calling /v1.
-  apiUrl: process.env.API_URL || "https://claudex-api-632653045864.asia-south1.run.app",
+  apiUrl: process.env.API_URL || "https://claudex-api-prod-tvjj3mwixq-el.a.run.app",
   botToken: process.env.CLAUDEX_BOT_TOKEN || "",          // shared secret; see PLAN §3
 
   // Where "Open the full dashboard" links to.
