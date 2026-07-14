@@ -26,7 +26,6 @@ oauth_config:
       - users:read
       - users:read.email
       - im:write
-      - app_home:read
 settings:
   event_subscriptions:
     request_url: https://<CLOUD_RUN_URL>/slack/events
