@@ -10,6 +10,8 @@ set -euo pipefail
 ENV=${1:-uat}
 PROJECT=yash-test-495112
 CLOUDSQL="$PROJECT:asia-south1:claudex-db"
+# Dashboard OAuth Web Client (public id). Override by exporting GOOGLE_CLIENT_ID.
+GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-632653045864-gjnh4jfqb5f476vmkhuq26ih3aaba65j.apps.googleusercontent.com}"
 API="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SHARED="$(cd "$API/../infra/terraform/shared" && pwd)"
 
@@ -22,7 +24,6 @@ fi
 PW=$(terraform -chdir="$SHARED" state pull | python3 -c "import sys,json;s=json.load(sys.stdin);print(next(i['attributes']['result'] for r in s['resources'] if r['type']=='random_password' and r['name']=='db' for i in r['instances'] if i['index_key']=='$ENV'))")
 
 cd "$API"
-[ -z "${GOOGLE_CLIENT_ID:-}" ] && echo "⚠  GOOGLE_CLIENT_ID not set — dashboard sign-in will 401. Export your GCP OAuth Web Client id:  GOOGLE_CLIENT_ID=... bash $0 $ENV"
 echo "▶ API → http://localhost:8080   (DB: claudex_$ENV via tunnel)"
 DATABASE_URL="postgresql://claudex_$ENV:$PW@127.0.0.1:5432/claudex_$ENV" \
-  GCP_PROJECT=$PROJECT PORT=8080 DASHBOARD_ORIGIN='*' GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}" npm start
+  GCP_PROJECT=$PROJECT PORT=8080 DASHBOARD_ORIGIN='*' GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" npm start
