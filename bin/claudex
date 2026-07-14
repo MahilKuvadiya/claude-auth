@@ -54,6 +54,7 @@ ssl._create_default_https_context = _macos_ssl_context
 __version__ = "2.2.1"  # x-release-please-version
 
 API_USAGE = "https://api.anthropic.com/api/oauth/usage"
+API_PROFILE = "https://api.anthropic.com/api/oauth/profile"
 OAUTH_BETA = "oauth-2025-04-20"
 ANTHROPIC_VERSION = "2023-06-01"
 OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
@@ -228,6 +229,25 @@ def fetch_usage(access_token, timeout=8):
     except Exception as e:
         return None, str(e).split("]")[-1].strip()[:40] or "network error"
 
+def fetch_profile(access_token, timeout=8):
+    """GET /api/oauth/profile — live account/org identity, including the current
+    plan tier. Returns (data, None) or (None, error). This is the only source of
+    a *fresh* tier: the usage endpoint carries none, and the stored oauthAccount
+    is a snapshot from login/switch time, so a seat upgrade isn't seen without it."""
+    req = urllib.request.Request(API_PROFILE, headers={
+        "Authorization": f"Bearer {access_token}",
+        "anthropic-beta": OAUTH_BETA,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "User-Agent": f"claudex/{__version__}",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode()), None
+    except urllib.error.HTTPError as e:
+        return None, ("expired" if e.code == 401 else f"http {e.code}")
+    except Exception as e:
+        return None, str(e).split("]")[-1].strip()[:40] or "network error"
+
 def parse_usage(d):
     """Normalize the API response to the windows we display."""
     def win(key):
@@ -290,6 +310,48 @@ def plan_label(oauth, subscription_type=None):
 def account_tier(p):
     """Plan label for a saved-profile dict from the accounts index."""
     return plan_label(p.get("oauthAccount"), p.get("subscriptionType"))
+
+def profile_tier_fields(profile):
+    """Map a live /oauth/profile response onto the oauthAccount tier keys that
+    plan_label() reads. The profile uses snake_case at the org level
+    (`rate_limit_tier`, `seat_tier`); we mirror them to the camelCase keys Claude
+    Code writes into ~/.claude.json. Individual (non-team) plans surface only as
+    booleans on the account, so fall back to those. Returns {} if unusable."""
+    if not isinstance(profile, dict):
+        return {}
+    org = profile.get("organization") or {}
+    acct = profile.get("account") or {}
+    out = {}
+    if org.get("rate_limit_tier"):
+        out["userRateLimitTier"] = org["rate_limit_tier"]
+    if org.get("seat_tier"):
+        out["seatTier"] = org["seat_tier"]
+    if not out:
+        # Personal Pro/Max plans have no org tier — use the generic labels
+        # (deliberately not "max_5x", which we can't distinguish here).
+        if acct.get("has_claude_max"):
+            out["userRateLimitTier"] = "claude_max"
+        elif acct.get("has_claude_pro"):
+            out["userRateLimitTier"] = "claude_pro"
+    return out
+
+def _refresh_tier(name, idx, token):
+    """Refresh a saved account's stored plan tier from the live profile, so a
+    seat upgrade (e.g. Team → Max 5x) shows up on the next `usage` without a
+    re-login. Best-effort: on any failure the existing stored tier is kept."""
+    acct = idx["accounts"].get(name)
+    if acct is None:
+        return
+    prof, err = fetch_profile(token)
+    if err or not prof:
+        return
+    fields = profile_tier_fields(prof)
+    if not fields:
+        return
+    oauth = dict(acct.get("oauthAccount") or {})
+    oauth.update(fields)
+    acct["oauthAccount"] = oauth
+    acct["tierFetchedAt"] = int(time.time())
 
 def refresh_access_token(refresh_token, timeout=10):
     """Exchange a refresh token for a fresh credential. Returns (data, err)."""
@@ -1043,6 +1105,9 @@ def _get_usage(name, idx, active, allow_refresh=True):
             return None, f"expired ({rerr})"
     if data is None:
         return None, err
+    # We have a working token — opportunistically refresh the stored plan tier
+    # from the live profile (the usage response carries no tier of its own).
+    _refresh_tier(name, idx, token)
     norm = parse_usage(data)
     norm["fetchedAt"] = int(time.time())
     idx["accounts"][name]["usage"] = norm
