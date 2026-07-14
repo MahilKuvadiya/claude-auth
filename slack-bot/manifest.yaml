@@ -1,0 +1,39 @@
+# Slack app manifest for the claudex bot. Create the app from this at
+# https://api.slack.com/apps → "From an app manifest". Replace <CLOUD_RUN_URL>
+# with the deployed service URL before enabling.
+display_information:
+  name: claudex
+  description: Pool dashboard + admin controls for Claude Code accounts.
+  background_color: "#1a1a1a"
+features:
+  bot_user:
+    display_name: claudex
+    always_online: true
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: false
+  slash_commands:
+    - command: /claudex
+      url: https://<CLOUD_RUN_URL>/slack/events
+      description: Check pool usage and headroom
+      usage_hint: usage
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - chat:write
+      - users:read
+      - users:read.email
+      - im:write
+      - app_home:read
+settings:
+  event_subscriptions:
+    request_url: https://<CLOUD_RUN_URL>/slack/events
+    bot_events:
+      - app_home_opened
+  interactivity:
+    is_enabled: true
+    request_url: https://<CLOUD_RUN_URL>/slack/events
+  org_deploy_enabled: false
+  socket_mode_enabled: false
