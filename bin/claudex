@@ -101,10 +101,45 @@ PASSTHROUGH = False    # set by `pool stop`: forward each request with its OWN t
 LAST_REQ_TS = 0.0      # epoch of the last proxied request (for passthrough idle-exit)
 PASSTHROUGH_IDLE_SECS = 900   # a stopped-but-passthrough daemon self-exits after this idle
 
-# ── claudex pool backend (GCP Cloud Functions) — server-side token custody ──
-# The unified claudex REST API (Cloud Run). Everything — pool control/data-plane and
-# analytics — is served here. Env-overridable (CLAUDEX_API) for UAT/local; defaults to prod.
-CLAUDEX_API = os.environ.get("CLAUDEX_API", "https://claudex-api-prod-tvjj3mwixq-el.a.run.app").rstrip("/")
+# ─────────────────────────── API target (env) ──────────────────────────────
+# The unified claudex REST API (Cloud Run) serves everything — pool control/data-plane
+# and analytics. Which deployment we talk to is resolved, in order:
+#   1. the CLAUDEX_API env var         (one-off override, highest priority)
+#   2. the saved target                (`claudex env <name>` → STORE_DIR/api-env.json)
+#   3. prod                            (default)
+CLAUDEX_ENVS = {
+    "prod":  "https://claudex-api-prod-tvjj3mwixq-el.a.run.app",
+    "uat":   "https://claudex-api-uat-tvjj3mwixq-el.a.run.app",
+    "local": "http://localhost:8080",
+}
+API_ENV_FILE = os.path.join(STORE_DIR, "api-env.json")
+
+def _load_api_env():
+    try:
+        with open(API_ENV_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_api_env(d):
+    os.makedirs(STORE_DIR, exist_ok=True)
+    tmp = API_ENV_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f)
+    os.replace(tmp, API_ENV_FILE)
+
+def _resolve_api_base():
+    override = os.environ.get("CLAUDEX_API")
+    if override:
+        return override.rstrip("/")
+    cfg = _load_api_env()
+    if cfg.get("url"):
+        return cfg["url"].rstrip("/")
+    if cfg.get("env") in CLAUDEX_ENVS:
+        return CLAUDEX_ENVS[cfg["env"]]
+    return CLAUDEX_ENVS["prod"]
+
+CLAUDEX_API = _resolve_api_base()
 
 # When a pool config has {"backend": true}, tokens are custodied server-side and minted
 # on demand. Fixed-path endpoints; per-pool paths are built inline from CLAUDEX_API.
@@ -4694,6 +4729,11 @@ def build_parser():
     up.add_argument("--force", action="store_true", help="reinstall even if already up to date")
     up.set_defaults(func=cmd_update)
 
+    ev = sub.add_parser("env", help="show or switch the API target (prod|uat|local)")
+    ev.add_argument("target", nargs="?", help="prod | uat | local")
+    ev.add_argument("--url", help=argparse.SUPPRESS)  # custom base URL
+    ev.set_defaults(func=cmd_env)
+
     # Hidden analytics sync entrypoint — driven by launchd, never shown in help.
     asy = sub.add_parser("__analytics-sync", help=argparse.SUPPRESS)
     asy.set_defaults(func=cmd_analytics_sync)
@@ -4970,6 +5010,42 @@ def ensure_analytics_agent():
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     except Exception:
         pass
+
+def cmd_env(args):
+    """Show or switch which API deployment claudex talks to (persisted)."""
+    override = os.environ.get("CLAUDEX_API")
+    target = getattr(args, "target", None)
+    url = getattr(args, "url", None)
+
+    if url:
+        _save_api_env({"url": url.rstrip("/")})
+        ok(f"API target → {url.rstrip('/')}  (custom)")
+    elif target:
+        t = target.lower()
+        if t not in CLAUDEX_ENVS:
+            die(f"unknown env '{target}'. choose: {', '.join(CLAUDEX_ENVS)}  (or `claudex env --url <base>`)")
+        _save_api_env({"env": t})
+        ok(f"API target → {bold(t)}  {dim(CLAUDEX_ENVS[t])}")
+    else:
+        cfg = _load_api_env()
+        active = "custom" if cfg.get("url") else (cfg.get("env") or "prod")
+        info()
+        info(IND + bold(clay("API target")))
+        info()
+        for name, base in CLAUDEX_ENVS.items():
+            dot = clay("●") if (name == active and not override) else dim("○")
+            info(IND + f"{dot} {name:<6} " + dim(base))
+        if cfg.get("url"):
+            dot = clay("●") if not override else dim("○")
+            info(IND + f"{dot} custom " + dim(cfg["url"]))
+        info()
+        info(IND + "active → " + bold(CLAUDEX_API))
+        info(dim(IND + "switch:  claudex env uat  ·  claudex env prod  ·  claudex env local"))
+        info()
+
+    if override:
+        info(dim(IND + f"note: CLAUDEX_API is set in your shell ({override}) and overrides the saved target until you `unset CLAUDEX_API`."))
+
 
 def main():
     if sys.platform != "darwin":
