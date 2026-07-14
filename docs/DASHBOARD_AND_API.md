@@ -2,10 +2,18 @@
 
 A deep, self-contained guide to the **analytics platform**: the `backend-api` (Fastify + Prisma +
 Postgres on Cloud Run) and the `dashboard-app` (Vite + React SPA). It explains how everything is
-built, how the pieces talk to each other, how to run it locally, and how to extend it. You should be
-able to read this top-to-bottom and confidently add new endpoints, charts, and pages.
+built, how the pieces talk to each other, how to run it locally, and how to extend it.
 
-> You generally won't need to touch the `claudex` CLI. Focus is the **API** and the **dashboard**.
+> **Reading this to build your own API?** This document doubles as an **implementation contract**. If
+> you are replacing this backend with your own (and our dashboard is being deprecated), the sections you
+> must implement to be compatible are:
+> - **[§13 API Contract](#13-api-contract-build-a-compatible-api)** — exact request/response schemas for every endpoint.
+> - **[§14 RBAC specification](#14-rbac-specification)** — the roles and the exact authorization/scoping algorithm.
+> - **[§15 Data model & metric definitions](#15-data-model--metric-definitions)** — what every field/metric means.
+> - **[§16 Ingestion contract](#16-ingestion-contract-collector--api)** — what the `claudex` collector sends (implement this to keep collecting).
+> - **[§17 Minimum viable API checklist](#17-minimum-viable-api-checklist)** — the smallest surface a dashboard needs.
+>
+> Sections 1–12 describe *our* reference implementation; 13–17 are the **normative contract** — build to those.
 
 ---
 
@@ -24,6 +32,11 @@ able to read this top-to-bottom and confidently add new endpoints, charts, and p
 10. [RBAC reference](#10-rbac-reference)
 11. [Recipes](#11-recipes)
 12. [Troubleshooting](#12-troubleshooting)
+13. [API Contract (build a compatible API)](#13-api-contract-build-a-compatible-api) ← **normative**
+14. [RBAC specification](#14-rbac-specification) ← **normative**
+15. [Data model & metric definitions](#15-data-model--metric-definitions) ← **normative**
+16. [Ingestion contract (collector → API)](#16-ingestion-contract-collector--api) ← **normative**
+17. [Minimum viable API checklist](#17-minimum-viable-api-checklist)
 
 ---
 
@@ -453,5 +466,288 @@ Enforced server-side by `allowedEmails` + `assert*` guards; the UI mirrors it bu
 
 ---
 
-*Questions or gaps? The code is the source of truth — start at `backend-api/src/server.js` and
-`dashboard-app/src/App.tsx` and follow the imports.*
+# NORMATIVE CONTRACT
+
+Everything below is what a **replacement API must implement** to be compatible with a dashboard (ours or
+yours). Field names and types are exact.
+
+## 13. API Contract (build a compatible API)
+
+### 13.0 Conventions
+- **Base path** `/v1`; JSON request/response; UTF-8.
+- **Auth header** `Authorization: Bearer <token>` — a **Google ID token** for dashboard endpoints; an
+  **analytics token** (opaque, issued by your `/enroll`) for collector endpoints.
+- **Numbers** — token counts are returned as JSON **numbers** (serialize any 64-bit ints → number). Costs
+  are floats (USD).
+- **Dates** — ISO-8601 UTC strings in responses. Range params: `days` (int 1–365, default **30**) **or**
+  explicit `from`/`to` (ISO). The window is `[from, to)` applied to `Session.startedAt`.
+- **Error envelope** for every non-2xx:
+  ```json
+  { "error": { "code": "forbidden", "message": "human text", "requestId": "abc123", "details": {} } }
+  ```
+  Codes → status: `invalid_request` 400, `unauthenticated` 401, `forbidden` 403, `not_found` 404,
+  `rate_limited` 429, else 500.
+- **CORS** — allow the dashboard origin(s); headers `Authorization`, `Content-Type`; methods
+  `GET, POST, PUT, DELETE, OPTIONS`.
+
+### 13.1 Dashboard auth — verification steps
+1. Read the Bearer token.
+2. Verify it is a valid **Google ID token**: signature (Google certs), `aud == GOOGLE_CLIENT_ID`,
+   `iss ∈ {accounts.google.com, https://accounts.google.com}`, unexpired, `email_verified !== false`.
+3. Enforce `email` domain ∈ allowed domains (e.g. `devxlabs.ai`) → else **403**.
+4. Resolve the **role** for `email` server-side (see §14) → attach actor `{ email, role, orgId }`.
+5. Bad/absent token → **401**; wrong domain/role → **403**. Never trust a client-supplied role.
+
+### 13.2 Endpoint reference (request → response)
+
+Auth levels: **user** = any signed-in; **elevated** = admin|pod_lead; **admin** = admin only.
+All list/aggregate responses are **role-scoped** by the actor's allowed-user set (§14).
+
+---
+**`GET /v1/me`** · user
+Response:
+```json
+{ "email": "ada@devxlabs.ai", "role": "admin", "orgId": null }
+```
+`role ∈ {"admin","pod_lead","member"}`. The dashboard uses this to decide which views to show.
+
+---
+**`GET /v1/analytics/summary`** · user · query: `days|from|to`, optional `user`
+```json
+{
+  "scope": "admin",
+  "from": "2026-06-14T…Z", "to": "2026-07-14T…Z",
+  "totals": {
+    "sessions": 85, "messages": 64969,
+    "inputTokens": 26885115, "outputTokens": 66274514,
+    "cacheReadTokens": 17770881420, "cacheCreateTokens": 290796252,
+    "costUsd": 36673.32,
+    "activeUsers": 4, "activeDays": 41, "avgDurationMs": 2520000
+  }
+}
+```
+
+---
+**`GET /v1/analytics/users`** · user · query: `days|from|to` — the leaderboard, **sorted by `costUsd` desc**
+```json
+{ "scope": "admin", "users": [
+  { "email": "ada@devxlabs.ai", "name": "Ada", "role": "admin",
+    "sessions": 20, "messages": 1500,
+    "inputTokens": 600000, "outputTokens": 400000,
+    "cacheReadTokens": 20000000, "cacheCreateTokens": 1500000, "costUsd": 400.0 }
+] }
+```
+
+---
+**`GET /v1/analytics/activity`** · user · query: `days|from|to`, optional `user` — one row per day, ascending
+```json
+{ "scope": "admin", "activity": [
+  { "date": "2026-07-01", "sessions": 3, "messages": 120,
+    "inputTokens": 80000, "outputTokens": 60000,
+    "cacheReadTokens": 3000000, "cacheCreateTokens": 200000, "costUsd": 40.0 }
+] }
+```
+
+---
+**`GET /v1/analytics/breakdown`** · user · query: **`by` (required)** ∈ `model|project|tool|weekday|hour`, `days|from|to`, optional `user`
+```json
+{ "scope": "admin", "by": "model", "items": [ /* shape depends on `by` */ ] }
+```
+Item shapes:
+- `by=model` / `by=project` → sorted by `costUsd` desc:
+  ```json
+  { "key": "claude-opus-4-8", "sessions": 30, "messages": 900,
+    "inputTokens": 900000, "outputTokens": 700000,
+    "cacheReadTokens": 30000000, "cacheCreateTokens": 2000000, "costUsd": 600.0 }
+  ```
+  (`key` is the model name / project path; use `"(unknown)"` for null.)
+- `by=tool` → sorted by `count` desc: `{ "key": "Bash", "count": 320 }` (count of `tool_use` occurrences).
+- `by=weekday` → `{ "key": 0, "sessions": 7, "messages": 100, "tokens": 1234, "costUsd": 20.0 }` where `key` is `0=Sun … 6=Sat`.
+- `by=hour` → same shape, `key` is `0…23` (hour of `startedAt`).
+
+---
+**`GET /v1/analytics/sessions`** · **admin** · query: `user, project, model, sort(recent|cost|tokens|duration|msgs), from, to, limit(≤200,def 50), offset(def 0)`
+```json
+{ "total": 85, "sessions": [
+  { "id": "d7fc…", "userEmail": "ic1@devxlabs.ai", "project": "/work/x", "gitBranch": "main",
+    "model": "claude-opus-4-8", "startedAt": "…Z", "endedAt": "…Z", "msgCount": 42,
+    "inputTokens": 50000, "outputTokens": 40000, "cacheReadTokens": 2000000,
+    "cacheCreateTokens": 150000, "costUsd": 30.0 }
+] }
+```
+`total` is the unpaginated count (for the pager). Metadata only — no message text here.
+
+---
+**`GET /v1/analytics/sessions/:id`** · **admin** — full thread (content); 404 if not found
+```json
+{ "session": { /* same shape as a sessions[] item */ },
+  "messages": [
+    { "uuid": "m1", "role": "user", "seq": 0, "text": "…", "thinking": null,
+      "model": null, "ts": "…Z", "durationMs": null,
+      "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheCreateTokens": 0,
+      "toolNames": [], "isSidechain": false }
+  ] }
+```
+Messages ordered by `(seq asc, ts asc)`. `text`/`thinking` are the raw prompt/response — **admin-only**.
+
+---
+**Admin management** (all · **admin**)
+- `GET /v1/admin/users` → `{ "users": [ { "email", "role", "name", "orgId", "createdAt" } ] }`
+- `PUT /v1/admin/users/:email/role` body `{ "role": "pod_lead" }` → `{ "email", "role", "name", "orgId" }`
+- `GET /v1/admin/pods` → `{ "pods": [ { "id", "name", "leadEmail", "orgId", "members": ["ic1@…"] } ] }`
+- `POST /v1/admin/pods` body `{ "name", "leadEmail", "orgId"? }` → **201** `{ "id","name","leadEmail","orgId","createdAt" }`
+- `POST /v1/admin/pods/:id/members` body `{ "email" }` → **201** `{ "podId", "userEmail" }`
+- `DELETE /v1/admin/pods/:id/members/:email` → `{ "podId", "userEmail", "removed": true }`
+
+---
+## 14. RBAC specification
+
+### 14.1 Roles
+```
+admin     — sees everyone's metrics AND session content; manages users/roles/pods.
+pod_lead  — sees their pod's members' metrics; creates pools; NO session content.
+member    — sees only their own metrics; NO session content, NO management.
+```
+Stored per user (`AnalyticsUser.role`, default `member`). **Bootstrap admins**: a configured list of
+emails (`ADMIN_EMAILS`) that are always `admin` regardless of the stored row — this solves the
+chicken-and-egg of granting the first role.
+
+### 14.2 Role resolution (server-side, authoritative)
+```
+resolveRole(email):
+  if email ∈ ADMIN_EMAILS:            return "admin"
+  row = store.getUser(email)
+  return row ? row.role : "member"
+```
+
+### 14.3 Read scope — `allowedEmails(actor)`
+Defines whose rows the actor may read; applied as `WHERE userEmail IN (allowed)` on every aggregate/list:
+```
+allowedEmails(actor):
+  if actor.role == "admin":     return null                 # no restriction → everyone
+  if actor.role == "pod_lead":  return { actor.email } ∪ { members of every pod actor leads }
+  else (member):                return { actor.email }
+```
+The optional **`?user=<email>`** param narrows a query to one user, but **only if that email is in the
+allowed set** — otherwise **403**. (This powers the per-user drill-down.)
+
+### 14.4 Per-endpoint authorization
+| Endpoint(s) | Required | Extra scoping |
+|---|---|---|
+| `GET /me` | any signed-in | — |
+| `GET /analytics/{summary,users,activity,breakdown}` | any signed-in | rows filtered by `allowedEmails`; `?user` must be allowed |
+| `GET /analytics/sessions`, `GET /analytics/sessions/:id` | **admin only** | session content is admin-only (hard gate) |
+| `GET/PUT /admin/*` | **admin only** | — |
+| `POST /pools*`, pool writes | admin **or** pod_lead | pod_lead confined to own org |
+
+### 14.5 Invariants (must hold)
+- Role is **always** derived server-side from identity; a client-sent role is ignored.
+- A `member` can never retrieve another user's rows (aggregate or session).
+- Session **content** (`text`/`thinking`) is returned by **admin only**. (A future relaxation could allow a
+  user to read *their own* content, but the reference contract keeps it admin-only.)
+- All list endpoints return only rows within `allowedEmails`.
+
+---
+## 15. Data model & metric definitions
+
+### 15.1 Core entities
+- **Session** — one Claude Code session. Fields: `id`, `userEmail`, `project` (cwd path), `gitBranch`,
+  `model` (dominant model), `startedAt`/`endedAt` (first/last message ts), `msgCount`, token totals
+  (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreateTokens`), `costUsd`.
+- **Message** — one turn. `uuid` (globally unique, dedup key), `sessionId`, `role` (`user|assistant`),
+  `seq`, `text?`, `thinking?`, `model?`, `ts?`, `durationMs?`, per-message token ints, `toolNames[]`
+  (names of `tool_use` calls), `isSidechain`.
+- **AnalyticsUser** — `email` (PK), `role`, `name?`, `orgId?`.
+- **Pod** / **PodMembership** — `Pod{ id, name, leadEmail, orgId? }`, membership `(podId, userEmail)`.
+
+### 15.2 Derived metrics (how the dashboard computes/expects them)
+| Metric | Definition |
+|---|---|
+| total tokens | `input + output + cacheRead + cacheCreate` |
+| cache-read ratio | `cacheReadTokens / totalTokens` |
+| avg tokens/session | `totalTokens / sessions` |
+| avg messages/session | `messages / sessions` |
+| `avgDurationMs` | mean of `(endedAt − startedAt)` over sessions with both timestamps |
+| `activeUsers` | distinct `userEmail` in range (admin scope) |
+| `activeDays` | distinct `date_trunc('day', startedAt)` in range |
+| `costUsd` (per session) | Σ over messages of `costFor(model, tokenBucket)` |
+
+**Cost model** (`costFor`, USD per **1M** tokens; adjust to your pricing):
+| family | input | output | cache-read | cache-write |
+|---|---|---|---|---|
+| opus (`*opus*`) | 15 | 75 | 1.5 | 18.75 |
+| sonnet (`*sonnet*`, default) | 3 | 15 | 0.30 | 3.75 |
+| haiku (`*haiku*`) | 0.80 | 4 | 0.08 | 1.0 |
+Cost is a **list-price-equivalent** estimate, not billed spend.
+
+### 15.3 Dimension semantics (breakdown)
+- `model`, `project` — group Sessions by that column.
+- `tool` — count occurrences across `Message.toolNames` (unnest the array; each element is one use).
+- `weekday` — `EXTRACT(DOW FROM startedAt)` → `0=Sun…6=Sat`.
+- `hour` — `EXTRACT(HOUR FROM startedAt)` → `0…23`.
+
+---
+## 16. Ingestion contract (collector → API)
+
+The `claudex` CLI runs a background collector (launchd, every 10 min) that reads each developer's
+`~/.claude/projects/**/*.jsonl` **read-only**, parses **user prompts + assistant text/thinking + usage
++ tools** (excludes images, tool_result payloads, attachments, empty turns), and POSTs **only new bytes**
+(per-file byte-offset). **Implement these to keep collecting** with the existing CLI:
+
+**`POST /v1/analytics/enroll`** — no bearer; optional `x-enroll-key: <shared key>` header; body:
+```json
+{ "email": "dev@devxlabs.ai", "name": "dev" }
+```
+Enforce email domain. Response `{ "email", "token": "<opaque analytics token>" }`. The collector **caches
+and echoes** this token as the Bearer on subsequent calls — **the token format is yours** (JWT, opaque,
+whatever your `/ingest` can verify). Bind the token to the email so ingest is self-scoped.
+
+**`POST /v1/analytics/ingest`** — Bearer = the analytics token; `userEmail` is taken from the **token**
+(never the body). Body (any part may be empty):
+```json
+{
+  "sessions": [ { "id", "project", "gitBranch", "model" } ],
+  "messages": [ { "uuid", "sessionId", "role", "seq", "text?", "thinking?", "model?", "ts?",
+                  "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreateTokens",
+                  "toolNames": [], "isSidechain" } ],
+  "syncState": [ { "filePath", "byteOffset", "mtime?" } ]
+}
+```
+Rules: **idempotent** — dedup messages by `uuid` (re-sends are no-ops); **self-scoped** — only accept
+sessions owned by the token's email (never let one user write another's session); after upserting,
+**recompute** each touched Session's rollups (counts, token sums, `costUsd`, `startedAt`/`endedAt`) from
+its messages; persist `syncState` per file. Response:
+```json
+{ "ok": true, "sessions": 1, "messagesReceived": 20, "messagesInserted": 18, "touchedSessions": 1 }
+```
+
+**`GET /v1/analytics/sync-state`** · analytics token → `{ "syncState": [ { "filePath", "byteOffset", "mtime" } ] }`
+(the collector uses local state primarily; this is a resume backup).
+**`GET /v1/analytics/whoami`** · analytics token → `{ "email" }`.
+
+> The collector's API base is `CLAUDEX_API` (compiled default → prod; overridable via env). Point it at
+> your API and it will enroll + ingest against you. If you replace the collector too, this section is moot.
+
+---
+## 17. Minimum viable API checklist
+
+To back **a read-only analytics dashboard**, implement (with §13.1 auth + §14 RBAC):
+- [ ] `GET /v1/me`
+- [ ] `GET /v1/analytics/summary`
+- [ ] `GET /v1/analytics/activity`
+- [ ] `GET /v1/analytics/users`
+- [ ] `GET /v1/analytics/breakdown` (at least `model`, `project`)
+- [ ] `GET /v1/analytics/sessions` + `GET /v1/analytics/sessions/:id` (admin) — only if you surface sessions
+- [ ] the error envelope, CORS, and BigInt→number conventions (§13.0)
+
+Add on demand: `/v1/admin/*` (only if the dashboard manages roles/pods), the **ingestion** endpoints
+(§16, only if reusing the `claudex` collector), and the pool control/data-plane (unrelated to analytics).
+
+**Data you need to store** to serve the above: `Session` + `Message` (+ their token/cost fields) and an
+`AnalyticsUser`(email→role) table, plus `Pod`/`PodMembership` if you support `pod_lead` scoping.
+
+---
+
+*Sections 1–12 = our reference implementation; 13–17 = the contract to build against. The running code is
+the ultimate source of truth — `backend-api/src/server.js`, `routes/analytics/*`, `lib/rbac.js`, and
+`dashboard-app/src/{api.ts,types.ts}`.*
