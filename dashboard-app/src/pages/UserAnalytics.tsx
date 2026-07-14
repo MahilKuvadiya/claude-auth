@@ -21,7 +21,7 @@ export function UserAnalytics() {
 
   const sessions = useQuery({
     queryKey: ['user-sessions', email, days],
-    queryFn: () => fetchSessions({ user: email, sort: 'recent', limit: 500, from: new Date(Date.now() - days * 864e5).toISOString() }),
+    queryFn: () => fetchSessions({ user: email, sort: 'recent', limit: 200, from: new Date(Date.now() - days * 864e5).toISOString() }),
     enabled: admin, // sessions are admin-only
   });
 

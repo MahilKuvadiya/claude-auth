@@ -26,11 +26,13 @@ const userColumns: ColumnDef<UserRow, unknown>[] = [
 
 export function Sessions() {
   const [sp] = useSearchParams();
-  const nav = useNavigate();
   const user = sp.get('user');
+  // Pure routing — no hooks here, so each child has a stable hook order.
+  return user ? <UserSessions email={user} /> : <SessionUsers />;
+}
 
-  if (user) return <UserSessions email={user} />;
-
+function SessionUsers() {
+  const nav = useNavigate();
   // Level 1 — list every user; click drills into their sessions.
   const q = useQuery({ queryKey: ['session-users'], queryFn: () => fetchLeaderboard(365) });
   return (
@@ -51,7 +53,7 @@ export function Sessions() {
 }
 
 function UserSessions({ email }: { email: string }) {
-  const q = useQuery({ queryKey: ['sessions', email], queryFn: () => fetchSessions({ user: email, sort: 'recent', limit: 500 }) });
+  const q = useQuery({ queryKey: ['sessions', email], queryFn: () => fetchSessions({ user: email, sort: 'recent', limit: 200 }) });
   return (
     <>
       <div className="mb-3">
