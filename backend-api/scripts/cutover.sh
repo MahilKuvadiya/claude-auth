@@ -32,7 +32,7 @@ for ENV in uat prod; do
     --service-account "claudex-api-$ENV@$PROJECT.iam.gserviceaccount.com" \
     --add-cloudsql-instances "$CLOUDSQL" \
     --set-secrets "DATABASE_URL=claudex-dburl-$ENV:latest" \
-    --set-env-vars "GCP_PROJECT=$PROJECT,KMS_LOCATION=$REGION,USAGE_TOPIC=claude-pool-usage,JWT_SECRET=projects/632653045864/secrets/claudex-jwt-$ENV/versions/latest,DASHBOARD_ORIGIN=*,ADMIN_EMAILS=vishal.makwana@devxlabs.ai,ENROLL_DOMAINS=devxlabs.ai" \
+    --set-env-vars "GCP_PROJECT=$PROJECT,KMS_LOCATION=$REGION,USAGE_TOPIC=claude-pool-usage,JWT_SECRET=projects/632653045864/secrets/claudex-jwt-$ENV/versions/latest,DASHBOARD_ORIGIN=*,ADMIN_EMAILS=vishal.makwana@devxlabs.ai,ENROLL_DOMAINS=devxlabs.ai,GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}" \
     --min-instances 0 --max-instances 4 --cpu 1 --memory 512Mi --timeout 60 --quiet
 done
 

@@ -58,16 +58,34 @@ export type Me = z.infer<typeof Me>;
 export const Summary = z.object({
   scope: z.string(),
   totals: z.object({
-    sessions: z.number().default(0),
-    messages: z.number().default(0),
-    inputTokens: z.number().default(0),
-    outputTokens: z.number().default(0),
-    cacheReadTokens: z.number().default(0),
-    cacheCreateTokens: z.number().default(0),
-    costUsd: z.number().default(0),
+    sessions: z.coerce.number().default(0),
+    messages: z.coerce.number().default(0),
+    inputTokens: z.coerce.number().default(0),
+    outputTokens: z.coerce.number().default(0),
+    cacheReadTokens: z.coerce.number().default(0),
+    cacheCreateTokens: z.coerce.number().default(0),
+    costUsd: z.coerce.number().default(0),
+    activeUsers: z.coerce.number().default(0),
+    activeDays: z.coerce.number().default(0),
+    avgDurationMs: z.coerce.number().default(0),
   }),
 });
 export type Summary = z.infer<typeof Summary>;
+
+// One row of GET /v1/analytics/breakdown (shape varies by dimension; all fields optional).
+export const BreakdownItem = z.object({
+  key: z.union([z.string(), z.number()]).transform((v) => String(v)),
+  sessions: z.coerce.number().default(0),
+  messages: z.coerce.number().default(0),
+  count: z.coerce.number().default(0),
+  tokens: z.coerce.number().default(0),
+  inputTokens: z.coerce.number().default(0),
+  outputTokens: z.coerce.number().default(0),
+  cacheReadTokens: z.coerce.number().default(0),
+  cacheCreateTokens: z.coerce.number().default(0),
+  costUsd: z.coerce.number().default(0),
+}).partial().extend({ key: z.union([z.string(), z.number()]).transform((v) => String(v)) });
+export type BreakdownItem = z.infer<typeof BreakdownItem>;
 
 export const UserRow = z.object({
   email: z.string(),
@@ -86,8 +104,12 @@ export type UserRow = z.infer<typeof UserRow>;
 export const ActivityPoint = z.object({
   date: z.string(),
   sessions: z.coerce.number().default(0),
-  tokens: z.coerce.number().default(0),
-  cost: z.coerce.number().default(0),
+  messages: z.coerce.number().default(0),
+  inputTokens: z.coerce.number().default(0),
+  outputTokens: z.coerce.number().default(0),
+  cacheReadTokens: z.coerce.number().default(0),
+  cacheCreateTokens: z.coerce.number().default(0),
+  costUsd: z.coerce.number().default(0),
 });
 export type ActivityPoint = z.infer<typeof ActivityPoint>;
 
@@ -116,12 +138,34 @@ export const SessionMessage = z.object({
   thinking: z.string().nullable().optional(),
   model: z.string().nullable().optional(),
   ts: z.string().nullable().optional(),
-  inputTokens: z.number().default(0),
-  outputTokens: z.number().default(0),
+  durationMs: z.number().nullable().optional(),
+  inputTokens: z.coerce.number().default(0),
+  outputTokens: z.coerce.number().default(0),
+  cacheReadTokens: z.coerce.number().default(0),
+  cacheCreateTokens: z.coerce.number().default(0),
   toolNames: z.array(z.string()).default([]),
   isSidechain: z.boolean().default(false),
 });
 export type SessionMessage = z.infer<typeof SessionMessage>;
+
+// ---- admin management ----
+export const AdminUser = z.object({
+  email: z.string(),
+  role: z.enum(['admin', 'pod_lead', 'member']).catch('member'),
+  name: z.string().nullable().optional(),
+  orgId: z.string().nullable().optional(),
+  createdAt: z.string().nullable().optional(),
+});
+export type AdminUser = z.infer<typeof AdminUser>;
+
+export const AdminPod = z.object({
+  id: z.string(),
+  name: z.string(),
+  leadEmail: z.string(),
+  orgId: z.string().nullable().optional(),
+  members: z.array(z.string()).default([]),
+});
+export type AdminPod = z.infer<typeof AdminPod>;
 
 export const JoinLink = z.object({
   joinToken: z.string(),

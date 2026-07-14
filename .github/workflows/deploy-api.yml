@@ -93,5 +93,5 @@ jobs:
             --service-account "claudex-api-$ENV@$PROJECT.iam.gserviceaccount.com" \
             --add-cloudsql-instances "$CLOUDSQL" \
             --set-secrets "DATABASE_URL=claudex-dburl-$ENV:latest" \
-            --set-env-vars "GCP_PROJECT=$PROJECT,KMS_LOCATION=$REGION,USAGE_TOPIC=claude-pool-usage,JWT_SECRET=projects/632653045864/secrets/claudex-jwt-$ENV/versions/latest,DASHBOARD_ORIGIN=${{ vars.DASHBOARD_ORIGIN }},ADMIN_EMAILS=${{ vars.ADMIN_EMAILS }},ENROLL_DOMAINS=devxlabs.ai,ENROLL_KEY=${{ secrets.ENROLL_KEY }}" \
+            --set-env-vars "GCP_PROJECT=$PROJECT,KMS_LOCATION=$REGION,USAGE_TOPIC=claude-pool-usage,JWT_SECRET=projects/632653045864/secrets/claudex-jwt-$ENV/versions/latest,DASHBOARD_ORIGIN=${{ vars.DASHBOARD_ORIGIN }},ADMIN_EMAILS=${{ vars.ADMIN_EMAILS }},ENROLL_DOMAINS=devxlabs.ai,ENROLL_KEY=${{ secrets.ENROLL_KEY }},GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}" \
             --min-instances 0 --max-instances 4 --cpu 1 --memory 512Mi --timeout 60

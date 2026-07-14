@@ -19,10 +19,13 @@ mock.module('../../src/lib/secrets.js', {
     writeRefreshToken: async () => {}, readRefreshToken: async () => 'rt', deleteMemberSecret: async () => {},
   },
 });
-mock.module('firebase-admin', {
-  defaultExport: {
-    apps: [{}], initializeApp: () => {},
-    auth: () => ({ verifyIdToken: async (t) => JSON.parse(Buffer.from(t, 'base64').toString('utf8')) }),
+mock.module('google-auth-library', {
+  namedExports: {
+    OAuth2Client: class {
+      async verifyIdToken({ idToken }) {
+        return { getPayload: () => JSON.parse(Buffer.from(idToken, 'base64').toString('utf8')) };
+      }
+    },
   },
 });
 
@@ -110,6 +113,31 @@ test('metrics are role-scoped', { skip }, async () => {
   // OTHER (unrelated member) sees none of IC's data
   const o = await app.inject({ method: 'GET', url: '/v1/analytics/summary', headers: fb(OTHER) });
   assert.equal(o.json().totals.sessions, 0, 'member sees only their own');
+});
+
+test('breakdown is role-scoped', { skip }, async () => {
+  // IC (member) sees only their own model breakdown
+  const im = await app.inject({ method: 'GET', url: '/v1/analytics/breakdown?by=model', headers: fb(IC) });
+  assert.equal(im.statusCode, 200);
+  const opus = im.json().items.find((x) => x.key === 'claude-opus-4-8');
+  assert.ok(opus, 'IC sees their opus model');
+  assert.equal(Number(opus.inputTokens), 110);
+
+  // project + hour + weekday breakdowns respond for the member
+  for (const by of ['project', 'hour', 'weekday', 'tool']) {
+    const r = await app.inject({ method: 'GET', url: `/v1/analytics/breakdown?by=${by}`, headers: fb(IC) });
+    assert.equal(r.statusCode, 200, `${by} breakdown ok`);
+    assert.ok(Array.isArray(r.json().items), `${by} returns items[]`);
+  }
+
+  // OTHER (unrelated member) sees nothing of IC's data
+  const om = await app.inject({ method: 'GET', url: '/v1/analytics/breakdown?by=model', headers: fb(OTHER) });
+  assert.equal(om.json().items.length, 0, 'member sees only their own breakdown');
+
+  // extended summary exposes derived stats
+  const s = await app.inject({ method: 'GET', url: '/v1/analytics/summary', headers: fb(IC) });
+  const t = s.json().totals;
+  assert.ok('activeUsers' in t && 'activeDays' in t && 'avgDurationMs' in t, 'summary has derived stats');
 });
 
 test('session content is admin-only', { skip }, async () => {

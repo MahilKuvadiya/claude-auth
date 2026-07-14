@@ -556,8 +556,21 @@ paths:
   /v1/analytics/activity:
     get:
       tags: [analytics]
-      summary: Daily activity series (role-scoped)
+      summary: Daily activity series — token buckets + messages + cost (role-scoped)
       security: [{ firebaseIdToken: [] }]
+      responses:
+        "200": { description: ok }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /v1/analytics/breakdown:
+    get:
+      tags: [analytics]
+      summary: Dimension rollup by model|project|tool|weekday|hour (role-scoped)
+      security: [{ firebaseIdToken: [] }]
+      parameters:
+        - { name: by, in: query, required: true, schema: { type: string, enum: [model, project, tool, weekday, hour] } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: days, in: query, schema: { type: integer } }
       responses:
         "200": { description: ok }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -569,6 +582,8 @@ paths:
       parameters:
         - { name: user, in: query, schema: { type: string } }
         - { name: project, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [recent, cost, tokens, duration, msgs] } }
         - { name: from, in: query, schema: { type: string } }
         - { name: to, in: query, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer } }
