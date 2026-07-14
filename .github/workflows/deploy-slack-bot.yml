@@ -1,0 +1,58 @@
+name: slack-bot
+
+# PRs run the bot's unit tests. Push to `main` deploys claudex-slack-bot to Cloud Run.
+# Keyless auth via the shared WIF pool; the deployer SA acts-as the bot runtime SA.
+# Slack/bot secrets live in Secret Manager and are wired via --set-secrets — they
+# never touch GitHub.
+on:
+  push:
+    branches: [main]
+    paths: ["slack-bot/**", ".github/workflows/deploy-slack-bot.yml"]
+  pull_request:
+    paths: ["slack-bot/**", ".github/workflows/deploy-slack-bot.yml"]
+
+defaults:
+  run:
+    working-directory: slack-bot
+
+env:
+  PROJECT: yash-test-495112
+  REGION: asia-south1
+  SERVICE: claudex-slack-bot
+  RUNTIME_SA: claudex-slack-bot@yash-test-495112.iam.gserviceaccount.com
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: node --test        # pure view/logic tests — no external deps
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write            # keyless Workload Identity Federation
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/632653045864/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: claudex-deployer@yash-test-495112.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --source . \
+            --project "$PROJECT" \
+            --region "$REGION" \
+            --allow-unauthenticated \
+            --service-account "$RUNTIME_SA" \
+            --set-secrets "SLACK_BOT_TOKEN=claudex-slack-bot-token:latest,SLACK_SIGNING_SECRET=claudex-slack-signing:latest,CLAUDEX_BOT_TOKEN=claudex-bot-token:latest" \
+            --set-env-vars "API_URL=${{ vars.SLACK_BOT_API_URL || 'https://claudex-api-prod-tvjj3mwixq-el.a.run.app' }},DASHBOARD_URL=${{ vars.SLACK_BOT_DASHBOARD_URL || 'https://docs.devxlabs.ai' }}" \
+            --min-instances 0 --max-instances 2 --cpu 1 --memory 256Mi --timeout 60

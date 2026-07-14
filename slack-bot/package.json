@@ -1,0 +1,16 @@
+{
+  "name": "claudex-slack-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Slack bot for claudex — App Home dashboard + admin controls over the pool backend-api.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.21.0"
+  }
+}
