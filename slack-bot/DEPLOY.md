@@ -4,10 +4,12 @@ Cloud Run · project `yash-test-495112` · region `asia-south1` (matches `backen
 
 ## CI/CD (recommended)
 
-`.github/workflows/deploy-slack-bot.yml` deploys `claudex-slack-bot` to Cloud Run on
-every push to `main` that touches `slack-bot/**` (PRs just run the tests). It uses the
-same keyless Workload Identity Federation as `deploy-api.yml`, and the Slack/bot secrets
-are pulled from **Secret Manager via `--set-secrets`** — they never touch GitHub.
+`.github/workflows/deploy-slack-bot.yml` deploys per environment on push (PRs just run
+the tests): **`uat` → `claudex-slack-bot-uat`** (points at the uat API) and
+**`main` → `claudex-slack-bot`** (points at the prod API). `workflow_dispatch` lets you
+trigger a deploy manually. It uses the same keyless Workload Identity Federation as
+`deploy-api.yml`, and the Slack/bot secrets are pulled from **Secret Manager via
+`--set-secrets`** — they never touch GitHub.
 
 **One-time setup** (approval-gated GCP writes — run once):
 
