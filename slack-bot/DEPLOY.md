@@ -2,6 +2,58 @@
 
 Cloud Run · project `yash-test-495112` · region `asia-south1` (matches `backend-api`).
 
+## CI/CD (recommended)
+
+`.github/workflows/deploy-slack-bot.yml` deploys `claudex-slack-bot` to Cloud Run on
+every push to `main` that touches `slack-bot/**` (PRs just run the tests). It uses the
+same keyless Workload Identity Federation as `deploy-api.yml`, and the Slack/bot secrets
+are pulled from **Secret Manager via `--set-secrets`** — they never touch GitHub.
+
+**One-time setup** (approval-gated GCP writes — run once):
+
+```bash
+PROJECT=yash-test-495112
+
+# 1. Secrets (see §"secret values" below for what goes in each)
+printf %s '<xoxb…>' | gcloud secrets create claudex-slack-bot-token --data-file=- --project="$PROJECT"
+printf %s '<signing>' | gcloud secrets create claudex-slack-signing  --data-file=- --project="$PROJECT"
+printf %s '<cbt_…>'  | gcloud secrets create claudex-bot-token       --data-file=- --project="$PROJECT"
+
+# 2. Dedicated runtime SA + read access to the three secrets
+gcloud iam service-accounts create claudex-slack-bot --project="$PROJECT"
+SA="claudex-slack-bot@${PROJECT}.iam.gserviceaccount.com"
+for S in claudex-slack-bot-token claudex-slack-signing claudex-bot-token; do
+  gcloud secrets add-iam-policy-binding "$S" --project="$PROJECT" \
+    --member="serviceAccount:${SA}" --role=roles/secretmanager.secretAccessor
+done
+# The API's runtime SAs also need to read the shared bot token:
+for ENV in uat prod; do
+  gcloud secrets add-iam-policy-binding claudex-bot-token --project="$PROJECT" \
+    --member="serviceAccount:claudex-api-${ENV}@${PROJECT}.iam.gserviceaccount.com" \
+    --role=roles/secretmanager.secretAccessor
+done
+
+# 3. Let the deployer SA act-as the bot runtime SA (same deployer as the API)
+gcloud iam service-accounts add-iam-policy-binding "$SA" --project="$PROJECT" \
+  --member="serviceAccount:claudex-deployer@${PROJECT}.iam.gserviceaccount.com" \
+  --role=roles/iam.serviceAccountUser
+
+# 4. (optional) override the API/dashboard URLs the bot points at
+#    gh variable set SLACK_BOT_API_URL --body 'https://<api-url>'
+#    gh variable set SLACK_BOT_DASHBOARD_URL --body 'https://docs.devxlabs.ai'
+```
+
+> ⚠️ **Ordering:** `deploy-api.yml` now also mounts `CLAUDEX_BOT_TOKEN=claudex-bot-token:latest`,
+> so the `claudex-bot-token` secret (step 1) **must exist before you merge** — otherwise the
+> next API deploy fails on a missing secret. Create the secrets first, then merge.
+
+After setup, merging to `main` deploys the bot automatically. Then set the three Slack
+request URLs (see §5). The manual `gcloud` flow below is the bootstrap / fallback.
+
+---
+
+## Manual deploy (bootstrap / fallback)
+
 You need three secret values:
 - `SLACK_BOT_TOKEN` — `xoxb-…` (Slack app → Install App → Bot User OAuth Token)
 - `SLACK_SIGNING_SECRET` — Slack app → Basic Information → Signing Secret
