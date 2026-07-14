@@ -101,12 +101,21 @@ PASSTHROUGH = False    # set by `pool stop`: forward each request with its OWN t
 LAST_REQ_TS = 0.0      # epoch of the last proxied request (for passthrough idle-exit)
 PASSTHROUGH_IDLE_SECS = 900   # a stopped-but-passthrough daemon self-exits after this idle
 
+# ─────────────────────────── build channel ─────────────────────────────────
+# Which distribution stream this binary belongs to. The prod build (published from
+# `main` → gs://claudex-dist/latest/) leaves this "prod"; the UAT build (published
+# from the `uat` branch → gs://claudex-dist/uat/) has the release pipeline rewrite it
+# to "uat". It drives TWO things: the default API target (below) and the self-update
+# source (see _DIST_PREFIX/_VERSION_PATH near DIST_BASE) — so a UAT claudex defaults
+# to the UAT API and only ever `claudex update`s within the UAT channel, never to prod.
+_CHANNEL = "prod"   # x-build-channel   (build rewrites this: prod | uat)
+
 # ─────────────────────────── API target (env) ──────────────────────────────
 # The unified claudex REST API (Cloud Run) serves everything — pool control/data-plane
 # and analytics. Which deployment we talk to is resolved, in order:
 #   1. the CLAUDEX_API env var         (one-off override, highest priority)
 #   2. the saved target                (`claudex env <name>` → STORE_DIR/api-env.json)
-#   3. prod                            (default)
+#   3. the build channel default       (prod build → prod; uat build → uat)
 CLAUDEX_ENVS = {
     "prod":  "https://claudex-api-prod-tvjj3mwixq-el.a.run.app",
     "uat":   "https://claudex-api-uat-tvjj3mwixq-el.a.run.app",
@@ -137,7 +146,7 @@ def _resolve_api_base():
         return cfg["url"].rstrip("/")
     if cfg.get("env") in CLAUDEX_ENVS:
         return CLAUDEX_ENVS[cfg["env"]]
-    return CLAUDEX_ENVS["prod"]
+    return CLAUDEX_ENVS.get(_CHANNEL, CLAUDEX_ENVS["prod"])
 
 CLAUDEX_API = _resolve_api_base()
 
@@ -153,6 +162,10 @@ REPO = "github.com/vishalmakwana111/claudex"
 # `update` fetches the VERSION marker and the arch binary + checksum from this base.
 DIST_BASE = os.environ.get("CLAUDEX_DIST_BASE", "https://storage.googleapis.com/claudex-dist")
 DIST_ARCH = "claudex-arm64"  # Apple Silicon only — see install.sh for the Intel guard.
+# Self-update stays within this binary's build channel: prod pulls latest/ + root VERSION;
+# uat pulls uat/ + uat/VERSION. A UAT claudex therefore updates to newer UAT builds only.
+_DIST_PREFIX = "latest" if _CHANNEL == "prod" else _CHANNEL
+_VERSION_PATH = "VERSION" if _CHANNEL == "prod" else f"{_CHANNEL}/VERSION"
 
 # ───────────────────── analytics collector (automatic) ─────────────────────
 # Team session analytics. A launchd agent runs the hidden `__analytics-sync` every
@@ -3750,8 +3763,8 @@ def _dist_get(path, timeout=10):
         return None, str(e).split("]")[-1].strip()[:50] or "network error"
 
 def fetch_remote_version(timeout=10):
-    """Read the published VERSION marker from the dist bucket. Returns (ver, err)."""
-    data, err = _dist_get("VERSION", timeout=timeout)
+    """Read the published VERSION marker from this binary's dist channel. Returns (ver, err)."""
+    data, err = _dist_get(_VERSION_PATH, timeout=timeout)
     if err:
         return None, err
     return data.decode("utf-8").strip().lstrip("v") or None, None
@@ -3827,10 +3840,10 @@ def cmd_update(args):
         return
 
     # Fetch the binary + its checksum, then verify BEFORE touching the running file.
-    binary, err = _dist_get(f"latest/{DIST_ARCH}", timeout=60)
+    binary, err = _dist_get(f"{_DIST_PREFIX}/{DIST_ARCH}", timeout=60)
     if err:
         die(f"couldn't download the binary: {err}")
-    sums, err = _dist_get("latest/SHA256SUMS")
+    sums, err = _dist_get(f"{_DIST_PREFIX}/SHA256SUMS")
     if err:
         die(f"couldn't download the checksum: {err}")
     expected = _sha256_for(sums.decode("utf-8", "replace"), DIST_ARCH)
@@ -3897,6 +3910,10 @@ def cmd_doctor(args):
     capath = shutil.which("claudex")
     check("ok" if capath else "warn", "claudex on PATH",
           capath or "not found — hooks/statusline may fail")
+
+    # build channel + API target (informational)
+    check("ok", f"build channel: {_CHANNEL}", f"self-updates from {_DIST_PREFIX}/")
+    check("ok", "API target", CLAUDEX_API)
 
     # latest version (best-effort — skipped silently when offline)
     remote, rerr = fetch_remote_version(timeout=5)
@@ -5040,6 +5057,7 @@ def cmd_env(args):
             info(IND + f"{dot} custom " + dim(cfg["url"]))
         info()
         info(IND + "active → " + bold(CLAUDEX_API))
+        info(IND + dim(f"build channel: {_CHANNEL}  ·  updates from {_DIST_PREFIX}/"))
         info(dim(IND + "switch:  claudex env uat  ·  claudex env prod  ·  claudex env local"))
         info()
 
