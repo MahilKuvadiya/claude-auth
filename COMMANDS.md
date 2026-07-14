@@ -198,7 +198,7 @@ $ claudex usage
   █ <50%   █ <80%   █ ≥80%
 ```
 
-Usage comes from Anthropic's `/api/oauth/usage` endpoint (the same data Claude Code's `/status` → Usage tab shows). The **`TIER`** column (`Pro`, `Max 5x`, `Max 20x`, `Team`, `Enterprise`, `Free`) comes from saved metadata — no extra request. If an inactive account's token has expired, the last snapshot is shown with its age; switching to it (or [`refresh`](#refresh)) revives it.
+Usage comes from Anthropic's `/api/oauth/usage` endpoint (the same data Claude Code's `/status` → Usage tab shows). The **`TIER`** column (`Pro`, `Max 5x`, `Max 20x`, `Team`, `Enterprise`, `Free`) is refreshed live from `/api/oauth/profile` on each run, so a seat upgrade (e.g. Team → Max 5x) shows up without a re-login. If an inactive account's token has expired, the last snapshot is shown with its age (and its last-known tier); switching to it (or [`refresh`](#refresh)) revives it.
 
 ### `refresh`
 

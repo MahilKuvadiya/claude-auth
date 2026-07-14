@@ -11,8 +11,9 @@ export default async function analyticsSessionsRoutes(app) {
       querystring: {
         type: 'object',
         properties: {
-          user: { type: 'string' }, project: { type: 'string' },
+          user: { type: 'string' }, project: { type: 'string' }, model: { type: 'string' },
           from: { type: 'string' }, to: { type: 'string' },
+          sort: { type: 'string', enum: ['recent', 'cost', 'tokens', 'duration', 'msgs'], default: 'recent' },
           limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
           offset: { type: 'integer', minimum: 0, default: 0 },
         },
@@ -23,11 +24,17 @@ export default async function analyticsSessionsRoutes(app) {
     const where = {
       ...(q.user ? { userEmail: q.user.toLowerCase() } : {}),
       ...(q.project ? { project: { contains: q.project } } : {}),
+      ...(q.model ? { model: q.model } : {}),
       ...(q.from || q.to ? { startedAt: { ...(q.from ? { gte: new Date(q.from) } : {}), ...(q.to ? { lt: new Date(q.to) } : {}) } } : {}),
     };
+    // "duration" isn't a column — approximate by endedAt desc; the rest map to columns.
+    const orderBy = {
+      recent: { startedAt: 'desc' }, cost: { costUsd: 'desc' },
+      tokens: { outputTokens: 'desc' }, duration: { endedAt: 'desc' }, msgs: { msgCount: 'desc' },
+    }[q.sort || 'recent'];
     const [sessions, total] = await Promise.all([
       prisma.session.findMany({
-        where, orderBy: { startedAt: 'desc' }, take: q.limit || 50, skip: q.offset || 0,
+        where, orderBy, take: q.limit || 50, skip: q.offset || 0,
         select: {
           id: true, userEmail: true, project: true, gitBranch: true, model: true,
           startedAt: true, endedAt: true, msgCount: true,

@@ -1,0 +1,86 @@
+name: publish-uat-cli
+
+# Second distribution channel for the CLI. Every push to the `uat` branch compiles a
+# UAT-flavoured claudex and publishes it to gs://claudex-dist/uat/. That binary defaults
+# to the UAT API and self-updates only within the uat/ channel — so developers can test
+# CLI changes against UAT without shipping to the prod fleet.
+#
+#   install:  curl -fsSL https://storage.googleapis.com/claudex-dist/uat/install.sh | bash
+#
+# The prod channel (latest/ + root VERSION + install.sh) is published separately from
+# `main` by release-please.yml and is never touched here.
+
+on:
+  push:
+    branches: [uat]
+    paths:
+      - bin/claudex
+      - Makefile
+      - packaging/install.sh
+      - .github/workflows/publish-uat-cli.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write            # required for keyless Workload Identity Federation
+
+jobs:
+  publish-uat:
+    runs-on: macos-14        # Apple Silicon (arm64) — sets the binary's macOS floor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Nuitka
+        run: python3 -m pip install --upgrade pip nuitka
+
+      - name: Compile UAT binary + ad-hoc sign + checksum (arm64)
+        # Pin the deployment target so the binary runs on macOS 14+ regardless of the
+        # runner's OS version. CHANNEL=uat bakes the uat API default + uat update source;
+        # BUILD=<run_number> makes the version monotonic so `claudex update` sees new builds.
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+        run: make dist CHANNEL=uat BUILD=${{ github.run_number }}
+
+      - name: Generate the uat install script
+        # Same installer as prod, but defaults the download prefix to uat/ so
+        # `… | bash` (no env vars) installs the UAT binary.
+        run: |
+          set -euo pipefail
+          sed -E 's/\$\{CLAUDEX_VERSION:-latest\}/${CLAUDEX_VERSION:-uat}/' \
+            packaging/install.sh > dist/install.sh
+
+      - id: auth
+        name: Authenticate to GCP (keyless / WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/632653045864/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: claudex-ci@yash-test-495112.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Publish to the uat/ channel
+        run: |
+          set -euo pipefail
+          gcloud storage cp dist/claudex-arm64 "gs://claudex-dist/uat/claudex-arm64"
+          gcloud storage cp dist/SHA256SUMS    "gs://claudex-dist/uat/SHA256SUMS"
+          gcloud storage cp dist/VERSION       "gs://claudex-dist/uat/VERSION"
+          gcloud storage cp dist/install.sh    "gs://claudex-dist/uat/install.sh" \
+            --content-type=text/x-shellscript
+          # UAT objects are all mutable (rolling channel) — keep a short cache.
+          gcloud storage objects update \
+            "gs://claudex-dist/uat/claudex-arm64" \
+            "gs://claudex-dist/uat/SHA256SUMS" \
+            "gs://claudex-dist/uat/VERSION" \
+            "gs://claudex-dist/uat/install.sh" \
+            --cache-control="public, max-age=60"
+
+      - name: Summary
+        run: |
+          echo "Published UAT claudex $(cat dist/VERSION) → gs://claudex-dist/uat/" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo 'curl -fsSL https://storage.googleapis.com/claudex-dist/uat/install.sh | bash' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

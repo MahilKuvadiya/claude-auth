@@ -10,11 +10,13 @@ import assert from 'node:assert/strict';
 
 const HAVE_DB = !!process.env.DATABASE_URL;
 
-mock.module('firebase-admin', {
-  defaultExport: {
-    apps: [{}],
-    initializeApp: () => {},
-    auth: () => ({ verifyIdToken: async (t) => JSON.parse(Buffer.from(t, 'base64').toString('utf8')) }),
+mock.module('google-auth-library', {
+  namedExports: {
+    OAuth2Client: class {
+      async verifyIdToken({ idToken }) {
+        return { getPayload: () => JSON.parse(Buffer.from(idToken, 'base64').toString('utf8')) };
+      }
+    },
   },
 });
 
@@ -25,8 +27,8 @@ const { prisma } = await import('../../src/lib/clients.js');
 const tok = (email) => Buffer.from(JSON.stringify({ uid: email, email }), 'utf8').toString('base64');
 const H = (email) => ({ authorization: `Bearer ${tok(email)}` });
 const ADMIN = 'boss@devxlabs.ai';
-const LEAD = 'lead@devxlabs.ai';
-const MEMBER = 'ic@devxlabs.ai';
+const LEAD = 'rbac-lead@devxlabs.ai';
+const MEMBER = 'rbac-ic@devxlabs.ai';
 
 let app;
 before(async () => {

@@ -36,6 +36,9 @@ export const config = {
   enrollKey: process.env.ENROLL_KEY || '',
   enrollDomains: (process.env.ENROLL_DOMAINS || 'devxlabs.ai')
     .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  // Dashboard sign-in: Google OAuth 2.0 Web Client id. The dashboard obtains a Google
+  // ID token (GIS) and we verify it here (aud=this client). Same domain allowlist as enroll.
+  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   // Shared secret the internal poll-usage route requires (Cloud Scheduler → OIDC in prod)
   internalToken: process.env.INTERNAL_TOKEN || '',
   logLevel: process.env.LOG_LEVEL || 'info',

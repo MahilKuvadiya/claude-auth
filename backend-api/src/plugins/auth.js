@@ -1,8 +1,9 @@
 // Auth strategies as plain preHandler functions (used per route group — nothing is
 // unauthenticated by omission). They attach req.actor / req.member or throw a typed error.
-import { firebaseAuth } from '../lib/clients.js';
+import { googleOAuth } from '../lib/clients.js';
 import { verifyMemberToken, verifyAnalyticsToken } from '../lib/jwt.js';
 import { resolveActor } from '../lib/rbac.js';
+import { config } from '../config.js';
 
 function httpError(statusCode, code, message) {
   return Object.assign(new Error(message), { statusCode, code });
@@ -12,19 +13,26 @@ function bearer(req) {
 }
 
 /**
- * Any authenticated dashboard user. Verifies the Firebase ID token for identity, then
- * resolves the role SERVER-SIDE from Postgres (never from a client-asserted claim).
+ * Any authenticated dashboard user. Verifies a Google ID token (GIS) for identity
+ * (aud = our OAuth client), enforces the org email domain, then resolves the role
+ * SERVER-SIDE from Postgres (never a client-asserted claim).
  * Sets req.actor = { uid, email, role: admin|pod_lead|member, orgId }.
  */
 export async function authUser(req) {
   const idToken = bearer(req);
   if (!idToken) throw httpError(401, 'unauthenticated', 'sign-in required');
-  let decoded;
-  try { decoded = await firebaseAuth.verifyIdToken(idToken); }
-  catch { throw httpError(401, 'unauthenticated', 'invalid or expired session'); }
-  if (!decoded.email) throw httpError(403, 'forbidden', 'account has no email');
-  const actor = await resolveActor(decoded.email);
-  req.actor = { uid: decoded.uid, ...actor };
+  let payload;
+  try {
+    const ticket = await googleOAuth.verifyIdToken({ idToken, audience: config.googleClientId });
+    payload = ticket.getPayload();
+  } catch { throw httpError(401, 'unauthenticated', 'invalid or expired session'); }
+  const email = (payload?.email || '').toLowerCase();
+  if (!email || payload.email_verified === false) throw httpError(403, 'forbidden', 'account email not verified');
+  const domain = email.split('@')[1];
+  if (config.enrollDomains.length && !config.enrollDomains.includes(domain))
+    throw httpError(403, 'forbidden', 'email domain not allowed');
+  const actor = await resolveActor(email);
+  req.actor = { uid: payload.sub, ...actor };
   return req.actor;
 }
 
