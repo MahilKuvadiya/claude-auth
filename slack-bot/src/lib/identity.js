@@ -5,7 +5,7 @@ import { backend } from "./backend.js";
 
 /**
  * Resolve a Slack user to their claudex identity.
- * @returns {{slackUserId, email, role, orgId}} role ∈ "org_admin" | "member" | "none"
+ * @returns {{slackUserId, email, role, orgId}} role ∈ "admin" | "pod_lead" | "member" | "none"
  */
 export async function resolveIdentity(client, slackUserId) {
   let email = null;
@@ -18,7 +18,7 @@ export async function resolveIdentity(client, slackUserId) {
   if (!email) return { slackUserId, email: null, role: "none", orgId: null };
 
   try {
-    const who = await backend.whoami(email); // { role, orgId } (backend TODO)
+    const who = await backend.me(email); // server-resolved { email, role, orgId }
     return {
       slackUserId,
       email,
@@ -26,13 +26,13 @@ export async function resolveIdentity(client, slackUserId) {
       orgId: who?.orgId || null,
     };
   } catch {
-    // Unknown to claudex (or backend whoami not yet deployed).
+    // Backend unreachable — treat as unknown; the view shows a friendly state.
     return { slackUserId, email, role: "none", orgId: null };
   }
 }
 
 export function isAdmin(identity) {
-  return identity?.role === "org_admin" || identity?.role === "pod_lead";
+  return identity?.role === "admin" || identity?.role === "pod_lead";
 }
 
 /** Throw a user-facing error if the identity may not perform admin actions. */

@@ -41,6 +41,9 @@ export const config = {
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   // Shared secret the internal poll-usage route requires (Cloud Scheduler → OIDC in prod)
   internalToken: process.env.INTERNAL_TOKEN || '',
+  // Shared secret the Slack bot presents (x-bot-token) to act on behalf of a Slack
+  // user (x-acting-email), whose role is still resolved server-side. Empty ⇒ disabled.
+  botToken: process.env.CLAUDEX_BOT_TOKEN || '',
   logLevel: process.env.LOG_LEVEL || 'info',
   nodeEnv: process.env.NODE_ENV || 'production',
 };

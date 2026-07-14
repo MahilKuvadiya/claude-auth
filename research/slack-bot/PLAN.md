@@ -46,13 +46,16 @@ Slack ──slash cmds / buttons / App Home──►  claudex-slack-bot  ──/
    - *org_admin* → the above **plus** the action buttons/modals.
    - *unmapped* → friendly "ask your admin to invite you" (admin @-mentioned).
 
-### Backend changes needed (small — most already exists)
+### Backend changes (done)
 
-- [ ] A **bot auth path** in `backend-api` (`x-bot-token` internal caller, or a bot SA with
-      an org_admin claim). Reuse the existing errors/authz plumbing.
-- [ ] (optional) `GET /v1/whoami?email=` to resolve role + pools for an email in one call,
-      or filter the existing list endpoints bot-side.
-- Everything else — pools, members, usage, join-links, revoke, rollups — **already there.**
+- [x] **Bot auth path** — `authUser` now accepts `x-bot-token` + `x-acting-email`; the
+      email's role is still resolved SERVER-SIDE via `resolveActor`. One edit; every
+      control route (`authFirebase`) works for bot admins automatically.
+- [x] **`GET /v1/me/pools`** — the acting user's pools with member rosters + cached
+      headroom, role-scoped (admin→all, pod_lead→org, member→their pools). Powers the App
+      Home in one call, using the 15-min scheduler's `rateLimit` snapshot (no live calls).
+- Identity comes from the existing **`GET /v1/me`**; invite/revoke/create reuse the existing
+      control routes. Roles are `admin` / `pod_lead` / `member`.
 
 ## 4. App Home dashboard (centerpiece)
 

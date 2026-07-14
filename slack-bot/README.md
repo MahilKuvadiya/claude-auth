@@ -61,9 +61,10 @@ Then create the Slack app from `manifest.yaml`, set the request URLs to
 
 ## Status
 
-- **P1 (this PR):** read-only App Home dashboard + `/claudex usage`, identity/role
-  resolution, admin action scaffolding.
-- **Backend TODO (PLAN §3):** the `x-bot-token` auth path and `GET /v1/whoami` in
-  backend-api. Until those land, `/v1` calls will 401 and the Home tab shows the
-  "not in a pool yet" state — the UI, role-gating, and views are all testable now.
-- **Next:** P2 wire admin mutations end-to-end · P3 polish · P4 proactive alerts.
+- **P1–P2 (this PR):** App Home dashboard (role-scoped), admin controls
+  (invite / revoke / create pool), `/claudex usage`, identity/role resolution.
+- **Backend (this PR):** `authUser` accepts `x-bot-token` + `x-acting-email`, and
+  `GET /v1/me/pools` returns the caller's pools + headroom. Identity via `GET /v1/me`.
+  Everything is wired end-to-end; it needs a deployed backend + the `CLAUDEX_BOT_TOKEN`
+  secret shared with `backend-api`.
+- **Next:** P3 polish · P4 proactive alerts + daily digest.

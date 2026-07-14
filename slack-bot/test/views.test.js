@@ -32,10 +32,10 @@ test("app home: missing email is handled", () => {
 
 test("app home: admin sees revoke + invite + create", () => {
   const v = buildAppHome({
-    identity: { email: "a@y.com", role: "org_admin" },
+    identity: { email: "a@y.com", role: "admin" },
     pools: [{
       id: "pl_1", name: "Platform", mode: "failover",
-      members: [{ id: "m1", email: "a@y.com", tier: "Max 5x", status: "active", rateLimit: { fiveHourPct: 12, weeklyPct: 30 } }],
+      members: [{ memberId: "m1", email: "a@y.com", tier: "Max 5x", status: "active", rateLimit: { fiveHourPct: 12, weeklyPct: 30 } }],
     }],
   });
   const txt = JSON.stringify(v.blocks);
@@ -50,7 +50,7 @@ test("app home: member does NOT see admin controls", () => {
     identity: { email: "m@y.com", role: "member" },
     pools: [{
       id: "pl_1", name: "Platform", mode: "failover",
-      members: [{ id: "m1", email: "m@y.com", tier: "Team", status: "active", rateLimit: { fiveHourPct: 5, weeklyPct: 9 } }],
+      members: [{ memberId: "m1", email: "m@y.com", tier: "Team", status: "active", rateLimit: { fiveHourPct: 5, weeklyPct: 9 } }],
     }],
   });
   const txt = JSON.stringify(v.blocks);

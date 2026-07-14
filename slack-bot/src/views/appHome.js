@@ -59,7 +59,7 @@ export function buildAppHome({ identity, pools = [], dashboardUrl, error } = {})
     for (const m of members) {
       const accessory = admin
         ? b.button("Revoke", "revoke_member", {
-            value: `${pool.id}:${m.id}`,
+            value: `${pool.id}:${m.memberId}`,
             style: "danger",
             confirm: {
               title: { type: "plain_text", text: "Revoke member?" },

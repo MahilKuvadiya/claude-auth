@@ -19,6 +19,19 @@ function bearer(req) {
  * Sets req.actor = { uid, email, role: admin|pod_lead|member, orgId }.
  */
 export async function authUser(req) {
+  // Trusted service caller (Slack bot): x-bot-token + x-acting-email. The email's
+  // role is still resolved SERVER-SIDE via resolveActor — the bot can't assert it.
+  const botTok = req.headers['x-bot-token'];
+  if (botTok) {
+    if (!config.botToken || botTok !== config.botToken)
+      throw httpError(401, 'unauthenticated', 'invalid bot token');
+    const email = String(req.headers['x-acting-email'] || '').trim().toLowerCase();
+    if (!email) throw httpError(403, 'forbidden', 'x-acting-email required');
+    const actor = await resolveActor(email);
+    req.actor = { uid: null, viaBot: true, ...actor };
+    return req.actor;
+  }
+
   const idToken = bearer(req);
   if (!idToken) throw httpError(401, 'unauthenticated', 'sign-in required');
   let payload;
